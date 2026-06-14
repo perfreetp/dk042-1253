@@ -126,12 +126,17 @@ export default {
           "0%": { backgroundPosition: "-1000px 0" },
           "100%": { backgroundPosition: "1000px 0" },
         },
+        "pulse-glow": {
+          "0%, 100%": { boxShadow: "0 0 0 0 rgba(0, 180, 216, 0)" },
+          "50%": { boxShadow: "0 0 0 4px rgba(0, 180, 216, 0.15)" },
+        },
       },
       animation: {
         "fade-in-up": "fade-in-up 0.4s ease-out forwards",
         "fade-in": "fade-in 0.3s ease-out forwards",
         "slide-in-right": "slide-in-right 0.3s ease-out forwards",
         shimmer: "shimmer 2s linear infinite",
+        "pulse-glow": "pulse-glow 2s ease-in-out infinite",
       },
     },
   },
