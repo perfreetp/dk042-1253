@@ -281,7 +281,9 @@ export interface QualityTrendPoint {
   /** 异常数量 */
   anomalyCount: number;
   /** 规则执行数 */
-  ruleExecutions: number;
+  ruleExecutions?: number;
+  /** 已解决数量 */
+  resolvedCount?: number;
 }
 
 /**

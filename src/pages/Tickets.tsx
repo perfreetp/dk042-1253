@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   BarChart3,
   UserCheck,
+  Info,
 } from 'lucide-react';
 import { useDQCStore } from '@/store/dqc';
 import { Drawer } from '@/components/ui/Drawer';
@@ -123,6 +124,11 @@ export default function Tickets() {
     store.rejectReview(selectedTicketId);
   };
 
+  const handleResolveToClosed = () => {
+    if (!selectedTicketId) return;
+    store.resolveToClosed(selectedTicketId);
+  };
+
   const closeDrawer = () => {
     setSelectedTicketId(null);
     setAssigneeId('');
@@ -134,6 +140,7 @@ export default function Tickets() {
     { key: TicketStatus.Open, label: '待处理', count: stats.open },
     { key: TicketStatus.InProgress, label: '处理中', count: stats.inProgress },
     { key: TicketStatus.PendingReview, label: '待复检', count: stats.pendingReview },
+    { key: TicketStatus.Resolved, label: '已解决', count: stats.resolved },
     { key: TicketStatus.Closed, label: '已关闭', count: stats.closed },
   ];
 
@@ -197,6 +204,26 @@ export default function Tickets() {
           </div>
         );
 
+      case TicketStatus.Resolved:
+        return (
+          <div className="space-y-3 w-full">
+            <div className="flex items-center gap-2 text-sm text-gold-700 bg-gold-50 px-3 py-2 rounded-lg">
+              <Info className="w-4 h-4 flex-shrink-0" />
+              <span>该工单为已解决状态，可确认关闭</span>
+            </div>
+            <div className="flex items-center gap-3 w-full">
+              <Button onClick={handleResolveToClosed} variant="primary" size="md" className="flex-1">
+                <CheckCircle2 className="w-4 h-4" />
+                确认关闭工单
+              </Button>
+              <Button onClick={handleReject} variant="secondary" size="md" className="flex-1">
+                <Ban className="w-4 h-4" />
+                复检驳回 - 退回处理
+              </Button>
+            </div>
+          </div>
+        );
+
       case TicketStatus.Closed:
         return (
           <div className="w-full text-center py-2">
@@ -247,7 +274,7 @@ export default function Tickets() {
         />
         <StatCard
           title="已关闭"
-          value={stats.closed}
+          value={stats.closed + stats.resolved}
           icon={<CheckCircle2 className="w-5 h-5" />}
           accentColor="success"
         />
@@ -295,6 +322,11 @@ export default function Tickets() {
               const stat = STATUS_CONFIG[ticket.status];
               const sla = computeSLA(ticket.slaDeadline);
               const assignee = store.getUserById(ticket.assigneeId);
+              const statusBadgeVariant = ticket.status === TicketStatus.Resolved
+                ? 'success'
+                : ticket.status === TicketStatus.Closed
+                  ? 'default'
+                  : stat.variant;
               return (
                 <div
                   key={ticket.id}
@@ -310,7 +342,7 @@ export default function Tickets() {
                         {ticket.id}
                       </span>
                       <Badge variant={prio.variant}>{prio.label}</Badge>
-                      <Badge variant={stat.variant}>{stat.label}</Badge>
+                      <Badge variant={statusBadgeVariant}>{stat.label}</Badge>
                     </div>
                     <h4 className="font-medium text-slate-800 mb-3">{ticket.title}</h4>
                     <div className="flex items-center gap-5 text-xs text-slate-500 flex-wrap">
@@ -362,7 +394,16 @@ export default function Tickets() {
                   <Badge variant={PRIORITY_CONFIG[selectedTicket.priority].variant} withDot>
                     {PRIORITY_CONFIG[selectedTicket.priority].label}优先级
                   </Badge>
-                  <Badge variant={STATUS_CONFIG[selectedTicket.status].variant} withDot>
+                  <Badge
+                    variant={
+                      selectedTicket.status === TicketStatus.Resolved
+                        ? 'success'
+                        : selectedTicket.status === TicketStatus.Closed
+                          ? 'default'
+                          : STATUS_CONFIG[selectedTicket.status].variant
+                    }
+                    withDot
+                  >
                     {STATUS_CONFIG[selectedTicket.status].label}
                   </Badge>
                   <span className="text-xs text-slate-400 font-mono">{selectedTicket.id}</span>

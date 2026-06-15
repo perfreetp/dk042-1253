@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { FileBarChart, Download, ChevronRight, Filter, TrendingUp, TrendingDown } from "lucide-react";
+import { FileBarChart, Download, ChevronRight, Filter, TrendingUp, TrendingDown, FileQuestion } from "lucide-react";
 import { useDQCStore } from "@/store/dqc";
 import { RuleType } from "@/data/types";
 import TrendLineChart from "@/components/charts/TrendLineChart";
@@ -9,6 +9,7 @@ import ColumnChart from "@/components/charts/ColumnChart";
 import GaugeChart from "@/components/charts/GaugeChart";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { cn } from "@/lib/utils";
 
 type TimeRange = 7 | 30 | 90;
 
@@ -21,6 +22,17 @@ const RULE_TYPE_OPTIONS = [
 ];
 
 const DONUT_COLORS = ["#00B4D8", "#F4A100", "#10B981", "#EF4444", "#8B5CF6"];
+
+function EmptyState({ message = "当前筛选条件下暂无数据" }: { message?: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+        <FileQuestion className="w-8 h-8 text-slate-400" />
+      </div>
+      <p className="text-sm text-slate-500">{message}</p>
+    </div>
+  );
+}
 
 export default function Reports() {
   const store = useDQCStore();
@@ -37,6 +49,24 @@ export default function Reports() {
   const systems = useMemo(
     () => [...new Set(store.topics.map((t) => t.system))],
     [store.topics]
+  );
+
+  const filterParams = useMemo(() => {
+    const params: { department?: string; system?: string; ruleType?: RuleType } = {};
+    if (selectedDept) params.department = selectedDept;
+    if (selectedSystem) params.system = selectedSystem;
+    if (selectedRuleType) params.ruleType = selectedRuleType as RuleType;
+    return params;
+  }, [selectedDept, selectedSystem, selectedRuleType]);
+
+  const fs = useMemo(
+    () => store.getFilteredStats(filterParams),
+    [store, filterParams]
+  );
+
+  const fTrend = useMemo(
+    () => store.getFilteredTrendData(filterParams, timeRange),
+    [store, filterParams, timeRange]
   );
 
   const filteredTopics = useMemo(() => {
@@ -73,42 +103,22 @@ export default function Reports() {
     [store.anomalies, filteredRuleIds]
   );
 
-  const filteredTasks = useMemo(() => {
-    return store.tasks.filter((t) => {
-      const taskRuleIds = (t as any).ruleId ? [(t as any).ruleId] : (t.ruleIds || []);
-      return taskRuleIds.some((rid: string) => filteredRuleIds.includes(rid));
-    });
-  }, [store.tasks, filteredRuleIds]);
-
   const filteredTickets = useMemo(
     () => store.tickets.filter((t) => filteredTopicIds.includes(t.topicId)),
     [store.tickets, filteredTopicIds]
   );
 
-  const overallScore = useMemo(() => {
-    if (filteredTopics.length === 0) return 0;
-    return Math.round(
-      (filteredTopics.reduce((sum, t) => sum + t.score, 0) / filteredTopics.length) * 10
-    ) / 10;
-  }, [filteredTopics]);
+  const hasData = fs.overallScore > 0 || filteredTopics.length > 0;
 
-  const filteredTrendData = useMemo(() => {
-    const now = new Date("2026-06-15T00:00:00Z");
-    const cutoff = new Date(now);
-    cutoff.setDate(now.getDate() - timeRange);
-    return store.trendData.filter((p) => new Date(p.date) >= cutoff);
-  }, [store.trendData, timeRange]);
-
-  const trendChartData = useMemo(
-    () =>
-      filteredTrendData.map((p) => ({
-        date: p.date.slice(5),
-        score: p.score,
-        discovered: p.anomalyCount,
-        resolved: Math.round(p.anomalyCount * (0.6 + Math.random() * 0.3)),
-      })),
-    [filteredTrendData]
-  );
+  const trendChartData = useMemo(() => {
+    if (fTrend.length === 0) return [];
+    return fTrend.map((p) => ({
+      date: p.date.slice(5),
+      score: p.score,
+      discovered: p.anomalyCount,
+      resolved: p.resolvedCount ?? Math.round(p.anomalyCount * 0.7),
+    }));
+  }, [fTrend]);
 
   const donutData = useMemo(() => {
     const countMap: Record<string, number> = {};
@@ -123,8 +133,24 @@ export default function Reports() {
       name: opt.label + "问题",
       value: countMap[opt.value] || 0,
       color: DONUT_COLORS[i],
-    }));
+    })).filter((d) => d.value > 0);
   }, [filteredAnomalies, store.rules]);
+
+  const horizontalBarData = useMemo(() => {
+    return RULE_TYPE_OPTIONS.map((opt) => {
+      const typeRules = filteredRules.filter(
+        (r) => r.type === opt.value && r.status !== "disabled"
+      );
+      const typeTopics = new Set(typeRules.map((r) => r.topicId));
+      const avg =
+        typeTopics.size > 0
+          ? filteredTopics
+              .filter((t) => typeTopics.has(t.id))
+              .reduce((sum, t) => sum + t.score, 0) / typeTopics.size
+          : 0;
+      return { name: opt.label, score: Math.round(avg * 10) / 10 };
+    }).filter((d) => d.score > 0);
+  }, [filteredRules, filteredTopics]);
 
   const columnData = useMemo(() => {
     const deptMap = new Map<string, { name: string; scores: number[] }>();
@@ -148,27 +174,12 @@ export default function Reports() {
     return Array.from(deptMap.entries()).map(([, v]) => ({
       name: v.name,
       current: Math.round((v.scores.reduce((a, b) => a + b, 0) / v.scores.length) * 10) / 10,
-      previous: Math.round(
-        ((v.scores.reduce((a, b) => a + b, 0) / v.scores.length - 2) * 10)
-      ) / 10,
+      previous: Math.max(
+        0,
+        Math.round(((v.scores.reduce((a, b) => a + b, 0) / v.scores.length - 2) * 10)) / 10
+      ),
     }));
   }, [filteredTopics, selectedRuleType, store.rules]);
-
-  const horizontalBarData = useMemo(() => {
-    return RULE_TYPE_OPTIONS.map((opt) => {
-      const typeRules = filteredRules.filter(
-        (r) => r.type === opt.value && r.status !== "disabled"
-      );
-      const typeTopics = new Set(typeRules.map((r) => r.topicId));
-      const avg =
-        typeTopics.size > 0
-          ? filteredTopics
-              .filter((t) => typeTopics.has(t.id))
-              .reduce((sum, t) => sum + t.score, 0) / typeTopics.size
-          : 0;
-      return { name: opt.label, score: Math.round(avg * 10) / 10 };
-    });
-  }, [filteredRules, filteredTopics]);
 
   const ruleCoverageRate = useMemo(() => {
     if (filteredTopics.length === 0) return 0;
@@ -177,26 +188,31 @@ export default function Reports() {
   }, [filteredTopics]);
 
   const issueResolutionRate = useMemo(() => {
-    const total = filteredTickets.length;
+    const total = fs.ticketStats.total;
     if (total === 0) return 0;
-    const resolved = filteredTickets.filter(
-      (t) => t.status === "resolved" || t.status === "closed"
-    ).length;
+    const resolved = fs.ticketStats.resolved + fs.ticketStats.closed;
     return Math.round((resolved / total) * 100 * 10) / 10;
-  }, [filteredTickets]);
+  }, [fs.ticketStats]);
 
   const avgResponseTime = useMemo(() => {
-    const baseTime = 4.2;
-    const deptFactor = selectedDept ? 0.8 : 1;
-    const systemFactor = selectedSystem ? 0.9 : 1;
-    return Math.round(baseTime * deptFactor * systemFactor * 10) / 10;
-  }, [selectedDept, selectedSystem]);
+    const closedOrResolved = filteredTickets.filter(
+      (t) => t.status === "closed" || t.status === "resolved"
+    );
+    if (closedOrResolved.length === 0) return 0;
+    const totalHours = closedOrResolved.reduce((sum, t) => {
+      const created = new Date(t.createdAt).getTime();
+      const updated = new Date(t.updatedAt).getTime();
+      const diffHours = Math.max(0.5, (updated - created) / (1000 * 60 * 60));
+      return sum + diffHours;
+    }, 0);
+    return Math.round((totalHours / closedOrResolved.length) * 10) / 10;
+  }, [filteredTickets]);
 
   const duplicateIssueRate = useMemo(() => {
-    const baseRate = 3.8;
-    const typeFactor = selectedRuleType ? 0.7 : 1;
-    return Math.round(baseRate * typeFactor * 10) / 10;
-  }, [selectedRuleType]);
+    const base = 2 + Math.min(filteredTopics.length * 0.15, 5);
+    const typeFactor = selectedRuleType ? 0.8 : 1;
+    return Math.round(base * typeFactor * 10) / 10;
+  }, [filteredTopics.length, selectedRuleType]);
 
   const monthlyReports = useMemo(() => {
     const now = new Date("2026-06-15T00:00:00Z");
@@ -211,7 +227,7 @@ export default function Reports() {
         name: `${now.getMonth() + 1}月数据质量月报`,
         type: "月度报告",
         period: `${currentMonth}-01 ~ ${currentMonth}-${String(now.getDate()).padStart(2, "0")}`,
-        score: overallScore,
+        score: fs.overallScore,
         status: "generating" as const,
         createdAt: `${currentMonth}-01 02:00`,
         creator: "系统",
@@ -221,7 +237,7 @@ export default function Reports() {
         name: `${lastMonth.getMonth() + 1}月数据质量月报`,
         type: "月度报告",
         period: `${lastMonthStr}-01 ~ ${lastMonthStr}-${String(new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0).getDate()).padStart(2, "0")}`,
-        score: Math.round((overallScore - 2.5) * 10) / 10,
+        score: Math.max(0, Math.round((fs.overallScore - 2.5) * 10) / 10),
         status: "completed" as const,
         createdAt: `${lastMonthStr}-01 02:00`,
         creator: "系统",
@@ -231,7 +247,7 @@ export default function Reports() {
         name: "第24周质量周报",
         type: "周度报告",
         period: "2026-06-09 ~ 2026-06-15",
-        score: overallScore + 0.5,
+        score: Math.min(100, fs.overallScore + 0.5),
         status: "completed" as const,
         createdAt: "2026-06-15 02:00",
         creator: "系统",
@@ -247,7 +263,7 @@ export default function Reports() {
         creator: "系统",
       },
     ];
-  }, [overallScore]);
+  }, [fs.overallScore]);
 
   const handleExportReport = () => {
     const rows: string[][] = [];
@@ -264,11 +280,16 @@ export default function Reports() {
     rows.push([""]);
 
     rows.push(["核心指标", "数值"]);
-    rows.push(["综合质量分", String(overallScore)]);
-    rows.push(["规则数量", String(filteredRules.length)]);
-    rows.push(["任务数量", String(filteredTasks.length)]);
-    rows.push(["异常数量", String(filteredAnomalies.length)]);
-    rows.push(["工单总数", String(filteredTickets.length)]);
+    rows.push(["综合质量分", String(fs.overallScore)]);
+    rows.push(["规则数量", String(fs.ruleCount)]);
+    rows.push(["任务数量", String(fs.taskCount)]);
+    rows.push(["异常数量", String(fs.anomalyCount)]);
+    rows.push(["工单总数", String(fs.ticketStats.total)]);
+    rows.push(["待处理工单", String(fs.ticketStats.open)]);
+    rows.push(["处理中工单", String(fs.ticketStats.inProgress)]);
+    rows.push(["待复检工单", String(fs.ticketStats.pendingReview)]);
+    rows.push(["已解决工单", String(fs.ticketStats.resolved)]);
+    rows.push(["已关闭工单", String(fs.ticketStats.closed)]);
     rows.push(["规则覆盖率", `${ruleCoverageRate}%`]);
     rows.push(["问题解决率", `${issueResolutionRate}%`]);
     rows.push(["平均响应时间", `${avgResponseTime}h`]);
@@ -277,8 +298,8 @@ export default function Reports() {
 
     rows.push(["各主题质量分", ""]);
     rows.push(["主题名称", "质量分"]);
-    filteredTopics.forEach((t) => {
-      rows.push([t.name, String(t.score)]);
+    fs.topicScores.forEach((t) => {
+      rows.push([t.topicName, String(t.score)]);
     });
     rows.push([""]);
 
@@ -310,11 +331,11 @@ export default function Reports() {
     rows.push([""]);
 
     rows.push(["统计数据", ""]);
-    rows.push(["规则数", String(store.ruleStats().total)]);
-    rows.push(["任务数", String(store.taskStats().total)]);
-    rows.push(["异常数", String(store.anomalies.length)]);
-    rows.push(["工单数", String(store.ticketStats().total)]);
-    rows.push(["已解决工单", String(store.ticketStats().resolved + store.ticketStats().closed)]);
+    rows.push(["规则数", String(fs.ruleCount)]);
+    rows.push(["任务数", String(fs.taskCount)]);
+    rows.push(["异常数", String(fs.anomalyCount)]);
+    rows.push(["工单数", String(fs.ticketStats.total)]);
+    rows.push(["已解决工单", String(fs.ticketStats.resolved + fs.ticketStats.closed)]);
 
     const csvContent = "\uFEFF" + rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -330,14 +351,14 @@ export default function Reports() {
     {
       label: "规则覆盖率",
       current: `${ruleCoverageRate}%`,
-      previous: `${Math.round((ruleCoverageRate - 3.3) * 10) / 10}%`,
+      previous: `${Math.max(0, Math.round((ruleCoverageRate - 3.3) * 10) / 10)}%`,
       change: "+3.3%",
       up: true,
     },
     {
       label: "问题解决率",
       current: `${issueResolutionRate}%`,
-      previous: `${Math.round((issueResolutionRate - 3.7) * 10) / 10}%`,
+      previous: `${Math.max(0, Math.round((issueResolutionRate - 3.7) * 10) / 10)}%`,
       change: "+3.7%",
       up: true,
     },
@@ -345,7 +366,7 @@ export default function Reports() {
       label: "平均响应时间",
       current: `${avgResponseTime}h`,
       previous: `${Math.round((avgResponseTime + 1.6) * 10) / 10}h`,
-      change: "-27.6%",
+      change: avgResponseTime > 0 ? "-27.6%" : "0%",
       up: true,
     },
     {
@@ -354,6 +375,51 @@ export default function Reports() {
       previous: `${Math.round((duplicateIssueRate + 1.4) * 10) / 10}%`,
       change: "-26.9%",
       up: true,
+    },
+  ];
+
+  const overviewCards = [
+    {
+      label: "综合质量分",
+      value: fs.overallScore,
+      suffix: "分",
+      color: "text-navy-700",
+      bg: "from-navy-50 to-navy-100/50",
+      filterLabel: selectedDept || selectedSystem || selectedRuleType
+        ? (selectedDept || "") + (selectedSystem ? ` / ${selectedSystem}` : "") + (selectedRuleType ? ` / ${RULE_TYPE_OPTIONS.find(o => o.value === selectedRuleType)?.label}` : "")
+        : "全部",
+    },
+    {
+      label: "规则数量",
+      value: fs.ruleCount,
+      suffix: "条",
+      color: "text-cyan-700",
+      bg: "from-cyan-50 to-cyan-100/50",
+      filterLabel: selectedRuleType ? RULE_TYPE_OPTIONS.find(o => o.value === selectedRuleType)?.label || "全部" : "全部类型",
+    },
+    {
+      label: "任务数量",
+      value: fs.taskCount,
+      suffix: "个",
+      color: "text-success-700",
+      bg: "from-success-50 to-success-100/50",
+      filterLabel: selectedSystem || "全部系统",
+    },
+    {
+      label: "异常数量",
+      value: fs.anomalyCount,
+      suffix: "条",
+      color: "text-gold-700",
+      bg: "from-gold-50 to-gold-100/50",
+      filterLabel: selectedRuleType ? RULE_TYPE_OPTIONS.find(o => o.value === selectedRuleType)?.label || "全部" : "全部类型",
+    },
+    {
+      label: "工单数量",
+      value: fs.ticketStats.total,
+      suffix: "张",
+      color: "text-danger-700",
+      bg: "from-danger-50 to-danger-100/50",
+      filterLabel: selectedDept || "全部部门",
     },
   ];
 
@@ -366,20 +432,17 @@ export default function Reports() {
     return {
       name: `自定义报告_${deptLabel}_${sysLabel}_${typeLabel}`,
       period: `近${timeRange}天`,
-      score: overallScore,
-      ruleCount: filteredRules.length,
-      anomalyCount: filteredAnomalies.length,
-      ticketCount: filteredTickets.length,
+      score: fs.overallScore,
+      ruleCount: fs.ruleCount,
+      anomalyCount: fs.anomalyCount,
+      ticketCount: fs.ticketStats.total,
     };
   }, [
     selectedDept,
     selectedSystem,
     selectedRuleType,
     timeRange,
-    overallScore,
-    filteredRules,
-    filteredAnomalies,
-    filteredTickets,
+    fs,
   ]);
 
   return (
@@ -459,11 +522,12 @@ export default function Reports() {
                 <button
                   key={d}
                   onClick={() => setTimeRange(d)}
-                  className={`flex-1 px-3 py-2 text-xs rounded-lg font-medium transition-colors ${
+                  className={cn(
+                    "flex-1 px-3 py-2 text-xs rounded-lg font-medium transition-colors",
                     timeRange === d
                       ? "bg-navy-600 text-white shadow-sm"
                       : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
-                  }`}
+                  )}
                 >
                   近{d}天
                 </button>
@@ -473,10 +537,35 @@ export default function Reports() {
         </div>
       </div>
 
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        {overviewCards.map((card, idx) => (
+          <div
+            key={idx}
+            className={cn(
+              "bg-gradient-to-br rounded-xl border border-slate-100 p-4 shadow-card",
+              card.bg
+            )}
+          >
+            <p className="text-xs text-slate-500 mb-1">{card.label}</p>
+            <p className={cn("text-2xl font-bold tabular-nums", card.color)}>
+              {card.value.toLocaleString()}
+              <span className="text-sm font-medium text-slate-500 ml-0.5">{card.suffix}</span>
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1.5 truncate">
+              筛选: {card.filterLabel}
+            </p>
+          </div>
+        ))}
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="bg-white rounded-xl shadow-card border border-slate-100 p-5 lg:col-span-1">
           <h3 className="font-semibold text-slate-800 mb-4">综合质量概览</h3>
-          <GaugeChart value={overallScore} height={260} />
+          {hasData ? (
+            <GaugeChart value={fs.overallScore} height={260} />
+          ) : (
+            <EmptyState />
+          )}
         </div>
 
         <div className="bg-white rounded-xl shadow-card border border-slate-100 p-5 lg:col-span-2">
@@ -486,30 +575,34 @@ export default function Reports() {
               <p className="text-xs text-slate-500 mt-0.5">本期 vs 上期</p>
             </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {kpiCards.map((item, idx) => (
-              <div
-                key={idx}
-                className="p-4 bg-slate-50/80 rounded-xl border border-slate-100"
-              >
-                <p className="text-xs text-slate-500 mb-1.5">{item.label}</p>
-                <p className="text-xl font-bold text-slate-800 tabular-nums">
-                  {item.current}
-                </p>
-                <div className="flex items-center gap-1 mt-2 text-xs">
-                  {item.up ? (
-                    <TrendingUp className="w-3.5 h-3.5 text-success-500" />
-                  ) : (
-                    <TrendingDown className="w-3.5 h-3.5 text-danger-500" />
-                  )}
-                  <span className={item.up ? "text-success-600" : "text-danger-600"}>
-                    {item.change}
-                  </span>
-                  <span className="text-slate-400">vs {item.previous}</span>
+          {hasData ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {kpiCards.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="p-4 bg-slate-50/80 rounded-xl border border-slate-100"
+                >
+                  <p className="text-xs text-slate-500 mb-1.5">{item.label}</p>
+                  <p className="text-xl font-bold text-slate-800 tabular-nums">
+                    {item.current}
+                  </p>
+                  <div className="flex items-center gap-1 mt-2 text-xs">
+                    {item.up ? (
+                      <TrendingUp className="w-3.5 h-3.5 text-success-500" />
+                    ) : (
+                      <TrendingDown className="w-3.5 h-3.5 text-danger-500" />
+                    )}
+                    <span className={item.up ? "text-success-600" : "text-danger-600"}>
+                      {item.change}
+                    </span>
+                    <span className="text-slate-400">vs {item.previous}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState />
+          )}
         </div>
       </div>
 
@@ -523,7 +616,11 @@ export default function Reports() {
               </p>
             </div>
           </div>
-          <TrendLineChart data={trendChartData} height={280} />
+          {trendChartData.length > 0 ? (
+            <TrendLineChart data={trendChartData} height={280} />
+          ) : (
+            <EmptyState message="当前筛选条件下暂无趋势数据" />
+          )}
         </div>
 
         <div className="bg-white rounded-xl shadow-card border border-slate-100 p-5">
@@ -533,7 +630,11 @@ export default function Reports() {
               <p className="text-xs text-slate-500 mt-0.5">各指标类型得分</p>
             </div>
           </div>
-          <HorizontalBarChart data={horizontalBarData} height={280} />
+          {horizontalBarData.length > 0 ? (
+            <HorizontalBarChart data={horizontalBarData} height={280} />
+          ) : (
+            <EmptyState />
+          )}
         </div>
       </div>
 
@@ -544,9 +645,13 @@ export default function Reports() {
               <h3 className="font-semibold text-slate-800">问题类型分布</h3>
               <p className="text-xs text-slate-500 mt-0.5">按规则类型统计异常</p>
             </div>
-            <Badge variant="info">共 {filteredAnomalies.length} 个异常</Badge>
+            <Badge variant="info">共 {fs.anomalyCount} 个异常</Badge>
           </div>
-          <DonutChart data={donutData} height={280} />
+          {donutData.length > 0 ? (
+            <DonutChart data={donutData} height={280} />
+          ) : (
+            <EmptyState />
+          )}
         </div>
 
         <div className="bg-white rounded-xl shadow-card border border-slate-100 p-5">
@@ -556,7 +661,11 @@ export default function Reports() {
               <p className="text-xs text-slate-500 mt-0.5">各部门质量得分排名</p>
             </div>
           </div>
-          <ColumnChart data={columnData} height={280} />
+          {columnData.length > 0 ? (
+            <ColumnChart data={columnData} height={280} />
+          ) : (
+            <EmptyState />
+          )}
         </div>
       </div>
 
@@ -617,7 +726,8 @@ export default function Reports() {
             >
               <div className="flex items-center gap-4 flex-1 min-w-0">
                 <div
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  className={cn(
+                    "w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0",
                     report.type === "月度报告"
                       ? "bg-cyan-50"
                       : report.type === "周度报告"
@@ -625,10 +735,11 @@ export default function Reports() {
                       : report.type === "季度报告"
                       ? "bg-gold-50"
                       : "bg-navy-50"
-                  }`}
+                  )}
                 >
                   <FileBarChart
-                    className={`w-5 h-5 ${
+                    className={cn(
+                      "w-5 h-5",
                       report.type === "月度报告"
                         ? "text-cyan-600"
                         : report.type === "周度报告"
@@ -636,7 +747,7 @@ export default function Reports() {
                         : report.type === "季度报告"
                         ? "text-gold-600"
                         : "text-navy-600"
-                    }`}
+                    )}
                   />
                 </div>
                 <div className="min-w-0">

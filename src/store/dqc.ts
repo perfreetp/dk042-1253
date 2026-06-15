@@ -105,6 +105,7 @@ interface DQCStore {
   requestReview: (ticketId: string) => void;
   approveReview: (ticketId: string) => void;
   rejectReview: (ticketId: string) => void;
+  resolveToClosed: (ticketId: string) => void;
 
   ruleStats: () => { total: number; enabled: number; disabled: number; pending: number };
   taskStats: () => { total: number; running: number; success: number; failed: number; pending: number };
@@ -112,6 +113,7 @@ interface DQCStore {
   overallQualityScore: () => number;
 
   getFilteredStats: (filters: { department?: string; system?: string; ruleType?: RuleType }) => FilteredStats;
+  getFilteredTrendData: (filters: { department?: string; system?: string; ruleType?: RuleType }, days: number) => QualityTrendPoint[];
 
   RULE_TYPE_LABELS: typeof RULE_TYPE_LABELS;
   TICKET_STATUS_LABELS: typeof TICKET_STATUS_LABELS;
@@ -364,6 +366,26 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
       ],
     })),
 
+  resolveToClosed: (ticketId) =>
+    set((state) => ({
+      tickets: state.tickets.map((t) =>
+        t.id === ticketId
+          ? { ...t, status: TicketStatus.Closed, updatedAt: new Date().toISOString() }
+          : t
+      ),
+      ticketActivities: [
+        ...state.ticketActivities,
+        {
+          id: `act_${Date.now()}`,
+          ticketId,
+          type: 'status_change' as const,
+          content: '已解决工单确认关闭',
+          operatorId: 'u001',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    })),
+
   ruleStats: () => {
     const { rules } = get();
     return {
@@ -462,6 +484,67 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
       topicScores,
       trendData,
     };
+  },
+
+  getFilteredTrendData: (filters, days) => {
+    const { topics, rules, anomalies, tickets, trendData } = get();
+    const { department, system, ruleType } = filters;
+
+    let filteredTopics = [...topics];
+    if (department) filteredTopics = filteredTopics.filter((t) => t.department === department);
+    if (system) filteredTopics = filteredTopics.filter((t) => t.system === system);
+    const topicIds = new Set(filteredTopics.map((t) => t.id));
+
+    let filteredRules = rules.filter((r) => topicIds.has(r.topicId));
+    if (ruleType) filteredRules = filteredRules.filter((r) => r.type === ruleType);
+    const ruleIds = new Set(filteredRules.map((r) => r.id));
+
+    const filteredAnomalies = anomalies.filter((a) => ruleIds.has(a.ruleId));
+    const filteredTickets = tickets.filter((t) => topicIds.has(t.topicId));
+
+    if (filteredTopics.length === 0) return [];
+
+    const now = new Date("2026-06-15T00:00:00Z");
+    const baseAvgScore =
+      filteredTopics.reduce((sum, t) => sum + t.score, 0) / filteredTopics.length;
+
+    const result: QualityTrendPoint[] = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+
+      const original = trendData.find((p) => p.date === dateStr);
+      const noise = (Math.random() - 0.5) * 4;
+      const score = Math.max(40, Math.min(100, Math.round((baseAvgScore + noise) * 10) / 10));
+      const coverageRatio = filteredTopics.length / topics.length;
+      const ruleRatio = filteredRules.length / Math.max(1, rules.length);
+      const anomalyFactor = coverageRatio * 0.6 + ruleRatio * 0.4;
+
+      const anomalyCount = original
+        ? Math.max(0, Math.round(original.anomalyCount * anomalyFactor))
+        : Math.max(0, Math.round(filteredAnomalies.length / days * (1 + (Math.random() - 0.5) * 0.5)));
+
+      const resolvedCount = Math.max(
+        0,
+        Math.round(
+          anomalyCount *
+            (0.5 +
+              Math.random() * 0.3 +
+              (filteredTickets.filter((t) => t.status === TicketStatus.Closed || t.status === TicketStatus.Resolved).length /
+                Math.max(1, filteredTickets.length)) *
+                0.2)
+        )
+      );
+
+      result.push({
+        date: dateStr,
+        score,
+        anomalyCount,
+        resolvedCount,
+      });
+    }
+    return result;
   },
 
   RULE_TYPE_LABELS,
