@@ -8,33 +8,35 @@ import {
   FileText,
   Tag,
   Activity,
-  UserCheck,
+  ShieldCheck,
+  Ban,
   ClipboardList,
   CheckCircle2,
   BarChart3,
-  ShieldCheck,
-  Ban,
+  UserCheck,
 } from 'lucide-react';
 import { useDQCStore } from '@/store/dqc';
 import { Drawer } from '@/components/ui/Drawer';
 import { StatCard } from '@/components/ui/StatCard';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
 import { TicketStatus, Priority } from '@/data/types';
 import { formatDateTime } from '@/utils/format';
 import { cn } from '@/lib/utils';
 
-const PRIORITY_CONFIG: Record<Priority, { label: string; borderClass: string; badgeClass: string }> = {
-  [Priority.Critical]: { label: '紧急', borderClass: 'border-l-danger-500', badgeClass: 'bg-danger-50 text-danger-700 border-danger-200' },
-  [Priority.High]: { label: '高', borderClass: 'border-l-gold-500', badgeClass: 'bg-gold-50 text-gold-700 border-gold-200' },
-  [Priority.Medium]: { label: '中', borderClass: 'border-l-cyan-500', badgeClass: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
-  [Priority.Low]: { label: '低', borderClass: 'border-l-slate-400', badgeClass: 'bg-slate-50 text-slate-600 border-slate-200' },
+const PRIORITY_CONFIG: Record<Priority, { label: string; borderClass: string; variant: 'danger' | 'warning' | 'info' | 'default' }> = {
+  [Priority.Critical]: { label: '紧急', borderClass: 'border-l-danger-500', variant: 'danger' },
+  [Priority.High]: { label: '高', borderClass: 'border-l-gold-500', variant: 'warning' },
+  [Priority.Medium]: { label: '中', borderClass: 'border-l-cyan-500', variant: 'info' },
+  [Priority.Low]: { label: '低', borderClass: 'border-l-slate-400', variant: 'default' },
 };
 
-const STATUS_CONFIG: Record<TicketStatus, { label: string; bgClass: string; textClass: string }> = {
-  [TicketStatus.Open]: { label: '待处理', bgClass: 'bg-slate-100', textClass: 'text-slate-700' },
-  [TicketStatus.InProgress]: { label: '处理中', bgClass: 'bg-cyan-50', textClass: 'text-cyan-700' },
-  [TicketStatus.PendingReview]: { label: '待复检', bgClass: 'bg-gold-50', textClass: 'text-gold-700' },
-  [TicketStatus.Resolved]: { label: '已解决', bgClass: 'bg-success-50', textClass: 'text-success-700' },
-  [TicketStatus.Closed]: { label: '已关闭', bgClass: 'bg-slate-100', textClass: 'text-slate-500' },
+const STATUS_CONFIG: Record<TicketStatus, { label: string; variant: 'default' | 'success' | 'warning' | 'info' }> = {
+  [TicketStatus.Open]: { label: '待处理', variant: 'default' },
+  [TicketStatus.InProgress]: { label: '处理中', variant: 'info' },
+  [TicketStatus.PendingReview]: { label: '待复检', variant: 'warning' },
+  [TicketStatus.Resolved]: { label: '已解决', variant: 'success' },
+  [TicketStatus.Closed]: { label: '已关闭', variant: 'default' },
 };
 
 const ACTIVITY_DOT: Record<string, { label: string; dotClass: string }> = {
@@ -88,6 +90,11 @@ export default function Tickets() {
   const ticketActivities = selectedTicketId ? store.getActivitiesByTicketId(selectedTicketId) : [];
   const ticketTopic = selectedTicket?.topicId ? store.getTopicById(selectedTicket.topicId) : null;
   const ticketAssignee = selectedTicket?.assigneeId ? store.getUserById(selectedTicket.assigneeId) : null;
+  const ticketReporter = selectedTicket?.reporterId ? store.getUserById(selectedTicket.reporterId) : null;
+
+  const sortedActivities = useMemo(() => {
+    return [...ticketActivities].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [ticketActivities]);
 
   const handleAssign = () => {
     if (!selectedTicketId || !assigneeId) return;
@@ -106,6 +113,16 @@ export default function Tickets() {
     setResolution('');
   };
 
+  const handleApprove = () => {
+    if (!selectedTicketId) return;
+    store.approveReview(selectedTicketId);
+  };
+
+  const handleReject = () => {
+    if (!selectedTicketId) return;
+    store.rejectReview(selectedTicketId);
+  };
+
   const closeDrawer = () => {
     setSelectedTicketId(null);
     setAssigneeId('');
@@ -117,12 +134,12 @@ export default function Tickets() {
     { key: TicketStatus.Open, label: '待处理', count: stats.open },
     { key: TicketStatus.InProgress, label: '处理中', count: stats.inProgress },
     { key: TicketStatus.PendingReview, label: '待复检', count: stats.pendingReview },
-    { key: TicketStatus.Resolved, label: '已解决', count: stats.resolved },
     { key: TicketStatus.Closed, label: '已关闭', count: stats.closed },
   ];
 
   const renderFooter = () => {
     if (!selectedTicket) return null;
+
     switch (selectedTicket.status) {
       case TicketStatus.Open:
         return (
@@ -130,66 +147,63 @@ export default function Tickets() {
             <select
               value={assigneeId}
               onChange={(e) => setAssigneeId(e.target.value)}
-              className="flex-1 h-9 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-400 bg-white"
+              className="flex-1 h-10 px-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-400 bg-white"
             >
               <option value="">选择责任人...</option>
               {store.users.map((u) => (
-                <option key={u.id} value={u.id}>{u.name} - {u.department}</option>
+                <option key={u.id} value={u.id}>
+                  {u.name} - {u.department}
+                </option>
               ))}
             </select>
-            <button
-              onClick={handleAssign}
-              disabled={!assigneeId}
-              className="px-4 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            <Button onClick={handleAssign} disabled={!assigneeId} size="md">
               分派
-            </button>
-            <button
-              onClick={handleStart}
-              className="px-4 py-2 text-sm font-medium bg-navy-700 hover:bg-navy-800 text-white rounded-lg transition-colors"
-            >
-              开始处理
-            </button>
+            </Button>
+            {selectedTicket.assigneeId && (
+              <Button onClick={handleStart} variant="secondary" size="md">
+                开始处理
+              </Button>
+            )}
           </div>
         );
+
       case TicketStatus.InProgress:
         return (
-          <div className="flex items-center gap-3 w-full">
+          <div className="flex items-end gap-3 w-full">
             <textarea
               value={resolution}
               onChange={(e) => setResolution(e.target.value)}
               placeholder="填写处理结果..."
-              rows={1}
-              className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-400"
+              rows={2}
+              className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-400"
             />
-            <button
-              onClick={handleSubmit}
-              disabled={!resolution.trim()}
-              className="px-4 py-2 text-sm font-medium bg-navy-700 hover:bg-navy-800 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-            >
+            <Button onClick={handleSubmit} disabled={!resolution.trim()} size="md">
               提交并请求复检
-            </button>
+            </Button>
           </div>
         );
+
       case TicketStatus.PendingReview:
         return (
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => store.approveReview(selectedTicketId!)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-success-600 hover:bg-success-700 text-white rounded-lg transition-colors"
-            >
+          <div className="flex items-center gap-3 w-full">
+            <Button onClick={handleApprove} variant="primary" size="md" className="flex-1">
               <ShieldCheck className="w-4 h-4" />
               复检通过 - 关闭工单
-            </button>
-            <button
-              onClick={() => store.rejectReview(selectedTicketId!)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-danger-600 hover:bg-danger-700 text-white rounded-lg transition-colors"
-            >
+            </Button>
+            <Button onClick={handleReject} variant="secondary" size="md" className="flex-1">
               <Ban className="w-4 h-4" />
               复检驳回 - 退回处理
-            </button>
+            </Button>
           </div>
         );
+
+      case TicketStatus.Closed:
+        return (
+          <div className="w-full text-center py-2">
+            <span className="text-sm text-slate-500">工单已关闭</span>
+          </div>
+        );
+
       default:
         return null;
     }
@@ -207,11 +221,36 @@ export default function Tickets() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard title="全部工单" value={stats.total} icon={<ClipboardList className="w-5 h-5" />} accentColor="navy" />
-        <StatCard title="待处理" value={stats.open} icon={<Clock className="w-5 h-5" />} accentColor="danger" />
-        <StatCard title="处理中" value={stats.inProgress} icon={<BarChart3 className="w-5 h-5" />} accentColor="cyan" />
-        <StatCard title="待复检" value={stats.pendingReview} icon={<UserCheck className="w-5 h-5" />} accentColor="gold" />
-        <StatCard title="已解决/已关闭" value={stats.resolved + stats.closed} icon={<CheckCircle2 className="w-5 h-5" />} accentColor="success" />
+        <StatCard
+          title="全部工单"
+          value={stats.total}
+          icon={<ClipboardList className="w-5 h-5" />}
+          accentColor="navy"
+        />
+        <StatCard
+          title="待处理"
+          value={stats.open}
+          icon={<Clock className="w-5 h-5" />}
+          accentColor="danger"
+        />
+        <StatCard
+          title="处理中"
+          value={stats.inProgress}
+          icon={<BarChart3 className="w-5 h-5" />}
+          accentColor="cyan"
+        />
+        <StatCard
+          title="待复检"
+          value={stats.pendingReview}
+          icon={<UserCheck className="w-5 h-5" />}
+          accentColor="gold"
+        />
+        <StatCard
+          title="已关闭"
+          value={stats.closed}
+          icon={<CheckCircle2 className="w-5 h-5" />}
+          accentColor="success"
+        />
       </div>
 
       <div className="bg-white rounded-xl shadow-card border border-slate-100 overflow-hidden">
@@ -235,7 +274,9 @@ export default function Tickets() {
                 onClick={() => setStatusFilter(f.key)}
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
-                  statusFilter === f.key ? 'bg-navy-50 text-navy-700' : 'text-slate-500 hover:bg-slate-100',
+                  statusFilter === f.key
+                    ? 'bg-navy-50 text-navy-700'
+                    : 'text-slate-500 hover:bg-slate-100'
                 )}
               >
                 {f.label}
@@ -258,13 +299,18 @@ export default function Tickets() {
                 <div
                   key={ticket.id}
                   onClick={() => setSelectedTicketId(ticket.id)}
-                  className={cn('flex items-stretch cursor-pointer hover:bg-slate-50/50 transition-colors border-l-4', prio.borderClass)}
+                  className={cn(
+                    'flex items-stretch cursor-pointer hover:bg-slate-50/50 transition-colors border-l-4',
+                    prio.borderClass
+                  )}
                 >
                   <div className="flex-1 p-5 min-w-0">
                     <div className="flex items-center gap-3 mb-2 flex-wrap">
-                      <span className="font-mono text-xs text-navy-600 font-medium">{ticket.id}</span>
-                      <span className={cn('px-2 py-0.5 rounded border text-xs font-medium', prio.badgeClass)}>{prio.label}</span>
-                      <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-medium', stat.bgClass, stat.textClass)}>{stat.label}</span>
+                      <span className="font-mono text-xs text-navy-600 font-medium">
+                        {ticket.id}
+                      </span>
+                      <Badge variant={prio.variant}>{prio.label}</Badge>
+                      <Badge variant={stat.variant}>{stat.label}</Badge>
                     </div>
                     <h4 className="font-medium text-slate-800 mb-3">{ticket.title}</h4>
                     <div className="flex items-center gap-5 text-xs text-slate-500 flex-wrap">
@@ -274,7 +320,9 @@ export default function Tickets() {
                       </div>
                       <div className="flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5" />
-                        <span className={cn(sla.urgent && 'text-danger-600 font-medium')}>SLA: {sla.text}</span>
+                        <span className={cn(sla.urgent && 'text-danger-600 font-medium')}>
+                          SLA: {sla.text}
+                        </span>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5" />
@@ -297,55 +345,81 @@ export default function Tickets() {
         onClose={closeDrawer}
         title={selectedTicket ? `${selectedTicket.id} 工单详情` : ''}
         size="xl"
-        footer={footerContent ? (
-          <div className="w-full bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)] -mx-6 -my-4 px-6 py-4 rounded-none">
-            {footerContent}
-          </div>
-        ) : undefined}
+        footer={
+          footerContent ? (
+            <div className="w-full bg-white shadow-[0_-4px_12px_rgba(0,0,0,0.08)] -mx-6 -my-4 px-6 py-4 rounded-none">
+              {footerContent}
+            </div>
+          ) : undefined
+        }
       >
         {selectedTicket && (
-          <div className="space-y-6">
+          <div className="space-y-6 pb-4">
+            <section>
+              <div className="mb-4">
+                <h2 className="text-xl font-bold text-slate-800 mb-3">{selectedTicket.title}</h2>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Badge variant={PRIORITY_CONFIG[selectedTicket.priority].variant} withDot>
+                    {PRIORITY_CONFIG[selectedTicket.priority].label}优先级
+                  </Badge>
+                  <Badge variant={STATUS_CONFIG[selectedTicket.status].variant} withDot>
+                    {STATUS_CONFIG[selectedTicket.status].label}
+                  </Badge>
+                  <span className="text-xs text-slate-400 font-mono">{selectedTicket.id}</span>
+                </div>
+              </div>
+              <p className="text-sm text-slate-600 leading-relaxed">{selectedTicket.description}</p>
+            </section>
+
+            <section className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <span className="text-xs text-slate-400">创建时间</span>
+                <p className="text-sm text-slate-700">{formatDateTime(selectedTicket.createdAt)}</p>
+              </div>
+              <div className="space-y-1">
+                <span className="text-xs text-slate-400">SLA截止时间</span>
+                <p
+                  className={cn(
+                    'text-sm',
+                    computeSLA(selectedTicket.slaDeadline).urgent
+                      ? 'text-danger-600 font-medium'
+                      : 'text-slate-700'
+                  )}
+                >
+                  {formatDateTime(selectedTicket.slaDeadline)}
+                  <span className="ml-2 text-xs text-slate-400">
+                    ({computeSLA(selectedTicket.slaDeadline).text})
+                  </span>
+                </p>
+              </div>
+            </section>
+
             <section>
               <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                <FileText className="w-4 h-4 text-navy-500" />
-                基本信息
+                <UserIcon className="w-4 h-4 text-navy-500" />
+                人员信息
               </h4>
-              <div className="space-y-3">
-                <div>
-                  <span className="text-xs text-slate-400">标题</span>
-                  <p className="text-sm font-medium text-slate-800 mt-0.5">{selectedTicket.title}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-slate-50 rounded-lg flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-navy-100 flex items-center justify-center text-navy-700 text-sm font-medium">
+                    {ticketReporter?.name.charAt(0) || '?'}
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-400">报告人</p>
+                    <p className="text-sm font-medium text-slate-800">
+                      {ticketReporter?.name || '未知'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-xs text-slate-400">描述</span>
-                  <p className="text-sm text-slate-600 mt-0.5">{selectedTicket.description}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <span className="text-xs text-slate-400">优先级</span>
-                    <p className="mt-0.5">
-                      <span className={cn('px-2 py-0.5 rounded border text-xs font-medium', PRIORITY_CONFIG[selectedTicket.priority].badgeClass)}>
-                        {PRIORITY_CONFIG[selectedTicket.priority].label}
-                      </span>
-                    </p>
+                <div className="p-3 bg-slate-50 rounded-lg flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-cyan-100 flex items-center justify-center text-cyan-700 text-sm font-medium">
+                    {ticketAssignee?.name.charAt(0) || '?'}
                   </div>
                   <div>
-                    <span className="text-xs text-slate-400">状态</span>
-                    <p className="mt-0.5">
-                      <span className={cn('px-2.5 py-0.5 rounded-full text-xs font-medium', STATUS_CONFIG[selectedTicket.status].bgClass, STATUS_CONFIG[selectedTicket.status].textClass)}>
-                        {STATUS_CONFIG[selectedTicket.status].label}
-                      </span>
+                    <p className="text-xs text-slate-400">责任人</p>
+                    <p className="text-sm font-medium text-slate-800">
+                      {ticketAssignee?.name || '未分派'}
                     </p>
-                  </div>
-                  <div>
-                    <span className="text-xs text-slate-400">SLA截止时间</span>
-                    <p className={cn('text-sm mt-0.5', computeSLA(selectedTicket.slaDeadline).urgent ? 'text-danger-600 font-medium' : 'text-slate-700')}>
-                      {formatDateTime(selectedTicket.slaDeadline)}
-                      <span className="ml-2 text-xs">({computeSLA(selectedTicket.slaDeadline).text})</span>
-                    </p>
-                  </div>
-                  <div>
-                    <span className="text-xs text-slate-400">创建时间</span>
-                    <p className="text-sm text-slate-700 mt-0.5">{formatDateTime(selectedTicket.createdAt)}</p>
                   </div>
                 </div>
               </div>
@@ -357,26 +431,22 @@ export default function Tickets() {
                   <Tag className="w-4 h-4 text-navy-500" />
                   关联主题
                 </h4>
-                <div className="p-3 bg-slate-50 rounded-lg">
+                <div className="p-4 bg-slate-50 rounded-lg space-y-2">
                   <p className="text-sm font-medium text-slate-800">{ticketTopic.name}</p>
-                  <p className="text-xs text-slate-500 mt-1">{ticketTopic.description}</p>
-                </div>
-              </section>
-            )}
-
-            {ticketAssignee && (
-              <section>
-                <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                  <UserIcon className="w-4 h-4 text-navy-500" />
-                  责任人
-                </h4>
-                <div className="p-3 bg-slate-50 rounded-lg flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-navy-100 flex items-center justify-center text-navy-700 text-sm font-medium">
-                    {ticketAssignee.name.charAt(0)}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-800">{ticketAssignee.name}</p>
-                    <p className="text-xs text-slate-500">{ticketAssignee.department} · {ticketAssignee.email}</p>
+                  <p className="text-xs text-slate-500">{ticketTopic.description}</p>
+                  <div className="flex items-center gap-4 pt-2">
+                    <div>
+                      <span className="text-xs text-slate-400">所属系统</span>
+                      <p className="text-sm text-slate-700">{ticketTopic.system}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400">所属部门</span>
+                      <p className="text-sm text-slate-700">{ticketTopic.department}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-400">质量分</span>
+                      <p className="text-sm font-medium text-navy-600">{ticketTopic.score}</p>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -387,20 +457,41 @@ export default function Tickets() {
                 <h4 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-navy-500" />
                   关联异常
-                  <span className="text-xs text-slate-400 font-normal">({ticketAnomalies.length})</span>
+                  <span className="text-xs text-slate-400 font-normal">
+                    ({ticketAnomalies.length})
+                  </span>
                 </h4>
                 <div className="space-y-2">
-                  {ticketAnomalies.map((a) => (
-                    <div key={a.id} className="p-3 bg-slate-50 rounded-lg">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="text-sm text-slate-700">{a.description}</p>
-                        <span className={cn('text-xs font-medium', SEVERITY_CONFIG[a.severity]?.class || 'text-slate-500')}>
-                          {SEVERITY_CONFIG[a.severity]?.label || a.severity}
-                        </span>
+                  {ticketAnomalies.map((a) => {
+                    const rule = store.getRuleById(a.ruleId);
+                    return (
+                      <div key={a.id} className="p-3 bg-slate-50 rounded-lg space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-slate-700">{a.description}</p>
+                          <span
+                            className={cn(
+                              'text-xs font-medium',
+                              SEVERITY_CONFIG[a.severity]?.class || 'text-slate-500'
+                            )}
+                          >
+                            {SEVERITY_CONFIG[a.severity]?.label || a.severity}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div>
+                            <span className="text-[10px] text-slate-400">数据标识</span>
+                            <p className="text-xs text-slate-600 font-mono">{a.dataKey}</p>
+                          </div>
+                          {rule && (
+                            <div>
+                              <span className="text-[10px] text-slate-400">所属规则</span>
+                              <p className="text-xs text-slate-600">{rule.name}</p>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-400 font-mono">{a.dataKey}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -410,26 +501,42 @@ export default function Tickets() {
                 <Activity className="w-4 h-4 text-navy-500" />
                 活动时间线
               </h4>
-              {ticketActivities.length === 0 ? (
+              {sortedActivities.length === 0 ? (
                 <p className="text-sm text-slate-400 py-4 text-center">暂无活动记录</p>
               ) : (
                 <div className="relative pl-6">
                   <div className="absolute left-[7px] top-2 bottom-2 w-px bg-slate-200" />
-                  {ticketActivities.map((act) => {
-                    const cfg = ACTIVITY_DOT[act.type] || { label: act.type, dotClass: 'bg-slate-400' };
+                  {sortedActivities.map((act) => {
+                    const cfg = ACTIVITY_DOT[act.type] || {
+                      label: act.type,
+                      dotClass: 'bg-slate-400',
+                    };
                     const operator = store.getUserById(act.operatorId);
                     return (
                       <div key={act.id} className="relative pb-4 last:pb-0">
-                        <div className={cn('absolute left-[-20px] top-1.5 w-[9px] h-[9px] rounded-full border-2 border-white', cfg.dotClass)} />
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <p className="text-sm text-slate-700">{act.content}</p>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded">{cfg.label}</span>
-                              {operator && <span className="text-xs text-slate-400">{operator.name}</span>}
+                        <div
+                          className={cn(
+                            'absolute left-[-20px] top-1.5 w-[9px] h-[9px] rounded-full border-2 border-white',
+                            cfg.dotClass
+                          )}
+                        />
+                        <div className="bg-slate-50 rounded-lg p-3">
+                          <p className="text-sm text-slate-700">{act.content}</p>
+                          <div className="flex items-center justify-between mt-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] px-1.5 py-0.5 bg-white border border-slate-200 text-slate-500 rounded">
+                                {cfg.label}
+                              </span>
+                              {operator && (
+                                <span className="text-xs text-slate-500">
+                                  {operator.name}
+                                </span>
+                              )}
                             </div>
+                            <span className="text-xs text-slate-400 whitespace-nowrap">
+                              {formatDateTime(act.createdAt)}
+                            </span>
                           </div>
-                          <span className="text-xs text-slate-400 whitespace-nowrap ml-4">{formatDateTime(act.createdAt)}</span>
                         </div>
                       </div>
                     );

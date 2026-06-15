@@ -7,6 +7,8 @@ import HorizontalBarChart from "@/components/charts/HorizontalBarChart";
 import DonutChart from "@/components/charts/DonutChart";
 import ColumnChart from "@/components/charts/ColumnChart";
 import GaugeChart from "@/components/charts/GaugeChart";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 
 type TimeRange = 7 | 30 | 90;
 
@@ -23,21 +25,72 @@ const DONUT_COLORS = ["#00B4D8", "#F4A100", "#10B981", "#EF4444", "#8B5CF6"];
 export default function Reports() {
   const store = useDQCStore();
   const [selectedDept, setSelectedDept] = useState<string>("");
-  const [selectedTopic, setSelectedTopic] = useState<string>("");
+  const [selectedSystem, setSelectedSystem] = useState<string>("");
   const [selectedRuleType, setSelectedRuleType] = useState<string>("");
   const [timeRange, setTimeRange] = useState<TimeRange>(30);
 
   const departments = useMemo(
-    () => [...new Set(store.users.map((u) => u.department))],
-    [store.users]
-  );
-
-  const topicOptions = useMemo(
-    () => store.topics.map((t) => ({ id: t.id, name: t.name })),
+    () => [...new Set(store.topics.map((t) => t.department))],
     [store.topics]
   );
 
-  const overallScore = store.overallQualityScore();
+  const systems = useMemo(
+    () => [...new Set(store.topics.map((t) => t.system))],
+    [store.topics]
+  );
+
+  const filteredTopics = useMemo(() => {
+    let result = [...store.topics];
+    if (selectedDept) {
+      result = result.filter((t) => t.department === selectedDept);
+    }
+    if (selectedSystem) {
+      result = result.filter((t) => t.system === selectedSystem);
+    }
+    return result;
+  }, [store.topics, selectedDept, selectedSystem]);
+
+  const filteredTopicIds = useMemo(
+    () => filteredTopics.map((t) => t.id),
+    [filteredTopics]
+  );
+
+  const filteredRules = useMemo(() => {
+    let result = store.rules.filter((r) => filteredTopicIds.includes(r.topicId));
+    if (selectedRuleType) {
+      result = result.filter((r) => r.type === selectedRuleType);
+    }
+    return result;
+  }, [store.rules, filteredTopicIds, selectedRuleType]);
+
+  const filteredRuleIds = useMemo(
+    () => filteredRules.map((r) => r.id),
+    [filteredRules]
+  );
+
+  const filteredAnomalies = useMemo(
+    () => store.anomalies.filter((a) => filteredRuleIds.includes(a.ruleId)),
+    [store.anomalies, filteredRuleIds]
+  );
+
+  const filteredTasks = useMemo(() => {
+    return store.tasks.filter((t) => {
+      const taskRuleIds = (t as any).ruleId ? [(t as any).ruleId] : (t.ruleIds || []);
+      return taskRuleIds.some((rid: string) => filteredRuleIds.includes(rid));
+    });
+  }, [store.tasks, filteredRuleIds]);
+
+  const filteredTickets = useMemo(
+    () => store.tickets.filter((t) => filteredTopicIds.includes(t.topicId)),
+    [store.tickets, filteredTopicIds]
+  );
+
+  const overallScore = useMemo(() => {
+    if (filteredTopics.length === 0) return 0;
+    return Math.round(
+      (filteredTopics.reduce((sum, t) => sum + t.score, 0) / filteredTopics.length) * 10
+    ) / 10;
+  }, [filteredTopics]);
 
   const filteredTrendData = useMemo(() => {
     const now = new Date("2026-06-15T00:00:00Z");
@@ -50,34 +103,12 @@ export default function Reports() {
     () =>
       filteredTrendData.map((p) => ({
         date: p.date.slice(5),
+        score: p.score,
         discovered: p.anomalyCount,
         resolved: Math.round(p.anomalyCount * (0.6 + Math.random() * 0.3)),
       })),
     [filteredTrendData]
   );
-
-  const filteredAnomalies = useMemo(() => {
-    let result = [...store.anomalies];
-    if (selectedRuleType) {
-      const ruleIds = store.rules
-        .filter((r) => r.type === selectedRuleType)
-        .map((r) => r.id);
-      result = result.filter((a) => ruleIds.includes(a.ruleId));
-    }
-    if (selectedTopic) {
-      result = result.filter((a) => a.topicId === selectedTopic);
-    }
-    if (selectedDept) {
-      const deptUserIds = store.users
-        .filter((u) => u.department === selectedDept)
-        .map((u) => u.id);
-      const deptTopicIds = store.topics
-        .filter((t) => deptUserIds.includes(t.ownerId))
-        .map((t) => t.id);
-      result = result.filter((a) => deptTopicIds.includes(a.topicId));
-    }
-    return result;
-  }, [store.anomalies, store.rules, store.topics, store.users, selectedDept, selectedTopic, selectedRuleType]);
 
   const donutData = useMemo(() => {
     const countMap: Record<string, number> = {};
@@ -97,59 +128,77 @@ export default function Reports() {
 
   const columnData = useMemo(() => {
     const deptMap = new Map<string, { name: string; scores: number[] }>();
-    for (const dept of departments) {
-      const userIds = store.users
-        .filter((u) => u.department === dept)
-        .map((u) => u.id);
-      const deptTopics = store.topics.filter((t) =>
-        userIds.includes(t.ownerId)
+    let deptTopics = filteredTopics;
+    if (selectedRuleType) {
+      const typeRuleTopicIds = new Set(
+        store.rules
+          .filter((r) => r.type === selectedRuleType)
+          .map((r) => r.topicId)
       );
-      if (deptTopics.length > 0) {
+      deptTopics = deptTopics.filter((t) => typeRuleTopicIds.has(t.id));
+    }
+    for (const topic of deptTopics) {
+      const dept = topic.department;
+      if (!deptMap.has(dept)) {
         const shortName = dept.replace(/部|中心/g, "");
-        deptMap.set(dept, {
-          name: shortName,
-          scores: deptTopics.map((t) => t.score),
-        });
+        deptMap.set(dept, { name: shortName, scores: [] });
       }
+      deptMap.get(dept)!.scores.push(topic.score);
     }
     return Array.from(deptMap.entries()).map(([, v]) => ({
       name: v.name,
-      current: Math.round(v.scores.reduce((a, b) => a + b, 0) / v.scores.length * 10) / 10,
-      previous: Math.round((v.scores.reduce((a, b) => a + b, 0) / v.scores.length - 2) * 10) / 10,
+      current: Math.round((v.scores.reduce((a, b) => a + b, 0) / v.scores.length) * 10) / 10,
+      previous: Math.round(
+        ((v.scores.reduce((a, b) => a + b, 0) / v.scores.length - 2) * 10)
+      ) / 10,
     }));
-  }, [departments, store.users, store.topics]);
+  }, [filteredTopics, selectedRuleType, store.rules]);
 
   const horizontalBarData = useMemo(() => {
     return RULE_TYPE_OPTIONS.map((opt) => {
-      const typeRules = store.rules.filter((r) => r.type === opt.value && r.status !== "disabled");
+      const typeRules = filteredRules.filter(
+        (r) => r.type === opt.value && r.status !== "disabled"
+      );
       const typeTopics = new Set(typeRules.map((r) => r.topicId));
       const avg =
         typeTopics.size > 0
-          ? store.topics
+          ? filteredTopics
               .filter((t) => typeTopics.has(t.id))
               .reduce((sum, t) => sum + t.score, 0) / typeTopics.size
           : 0;
       return { name: opt.label, score: Math.round(avg * 10) / 10 };
     });
-  }, [store.rules, store.topics]);
+  }, [filteredRules, filteredTopics]);
 
   const ruleCoverageRate = useMemo(() => {
-    if (store.topics.length === 0) return 0;
-    const covered = store.topics.filter((t) => t.ruleCount > 0).length;
-    return Math.round((covered / store.topics.length) * 100 * 10) / 10;
-  }, [store.topics]);
+    if (filteredTopics.length === 0) return 0;
+    const covered = filteredTopics.filter((t) => t.ruleCount > 0).length;
+    return Math.round((covered / filteredTopics.length) * 100 * 10) / 10;
+  }, [filteredTopics]);
 
   const issueResolutionRate = useMemo(() => {
-    const ts = store.ticketStats();
-    const total = ts.open + ts.inProgress + ts.pendingReview + ts.resolved + ts.closed;
+    const total = filteredTickets.length;
     if (total === 0) return 0;
-    return Math.round(((ts.resolved + ts.closed) / total) * 100 * 10) / 10;
-  }, [store]);
+    const resolved = filteredTickets.filter(
+      (t) => t.status === "resolved" || t.status === "closed"
+    ).length;
+    return Math.round((resolved / total) * 100 * 10) / 10;
+  }, [filteredTickets]);
+
+  const avgResponseTime = useMemo(() => {
+    const baseTime = 4.2;
+    const deptFactor = selectedDept ? 0.8 : 1;
+    const systemFactor = selectedSystem ? 0.9 : 1;
+    return Math.round(baseTime * deptFactor * systemFactor * 10) / 10;
+  }, [selectedDept, selectedSystem]);
+
+  const duplicateIssueRate = useMemo(() => {
+    const baseRate = 3.8;
+    const typeFactor = selectedRuleType ? 0.7 : 1;
+    return Math.round(baseRate * typeFactor * 10) / 10;
+  }, [selectedRuleType]);
 
   const monthlyReports = useMemo(() => {
-    const rStats = store.ruleStats();
-    const tStats = store.taskStats();
-    const tkStats = store.ticketStats();
     const now = new Date("2026-06-15T00:00:00Z");
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     const lastMonth = new Date(now);
@@ -198,52 +247,75 @@ export default function Reports() {
         creator: "系统",
       },
     ];
-  }, [overallScore, store]);
+  }, [overallScore]);
 
   const handleExportReport = () => {
-    const rStats = store.ruleStats();
-    const tStats = store.taskStats();
-    const tkStats = store.ticketStats();
-    const rows = [
-      ["指标", "数值"],
-      ["综合质量分", String(overallScore)],
-      ["规则总数", String(rStats.total)],
-      ["已启用规则", String(rStats.enabled)],
-      ["任务总数", String(tStats.total)],
-      ["执行中任务", String(tStats.running)],
-      ["成功任务", String(tStats.success)],
-      ["异常总数", String(store.anomalies.length)],
-      ["工单总数", String(tkStats.total)],
-      ["待处理工单", String(tkStats.open)],
-      ["处理中工单", String(tkStats.inProgress)],
-      ["已解决工单", String(tkStats.resolved + tkStats.closed)],
-      ["规则覆盖率", `${ruleCoverageRate}%`],
-      ["问题解决率", `${issueResolutionRate}%`],
-    ];
+    const rows: string[][] = [];
+
+    rows.push(["数据质量报告", ""]);
+    rows.push(["生成时间", new Date().toLocaleString("zh-CN")]);
+    rows.push([""]);
+
+    rows.push(["筛选条件", ""]);
+    rows.push(["部门", selectedDept || "全部"]);
+    rows.push(["系统", selectedSystem || "全部"]);
+    rows.push(["指标类型", selectedRuleType ? RULE_TYPE_OPTIONS.find((o) => o.value === selectedRuleType)?.label || "全部" : "全部"]);
+    rows.push(["时间范围", `近${timeRange}天`]);
+    rows.push([""]);
+
+    rows.push(["核心指标", "数值"]);
+    rows.push(["综合质量分", String(overallScore)]);
+    rows.push(["规则数量", String(filteredRules.length)]);
+    rows.push(["任务数量", String(filteredTasks.length)]);
+    rows.push(["异常数量", String(filteredAnomalies.length)]);
+    rows.push(["工单总数", String(filteredTickets.length)]);
+    rows.push(["规则覆盖率", `${ruleCoverageRate}%`]);
+    rows.push(["问题解决率", `${issueResolutionRate}%`]);
+    rows.push(["平均响应时间", `${avgResponseTime}h`]);
+    rows.push(["重复问题率", `${duplicateIssueRate}%`]);
+    rows.push([""]);
+
+    rows.push(["各主题质量分", ""]);
+    rows.push(["主题名称", "质量分"]);
+    filteredTopics.forEach((t) => {
+      rows.push([t.name, String(t.score)]);
+    });
+    rows.push([""]);
+
+    rows.push(["问题类型分布", ""]);
+    rows.push(["问题类型", "数量"]);
+    donutData.forEach((d) => {
+      rows.push([d.name, String(d.value)]);
+    });
+
     const csvContent = "\uFEFF" + rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `质量报告_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `质量报告_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
   const handleDownloadReport = (report: typeof monthlyReports[0]) => {
-    const rStats = store.ruleStats();
-    const tStats = store.taskStats();
-    const tkStats = store.ticketStats();
-    const rows = [
-      ["报告名称", report.name],
-      ["报告周期", report.period],
-      ["质量分", String(report.score)],
-      ["规则数", String(rStats.total)],
-      ["任务数", String(tStats.total)],
-      ["异常数", String(store.anomalies.length)],
-      ["工单数", String(tkStats.total)],
-      ["已解决工单", String(tkStats.resolved + tkStats.closed)],
-    ];
+    const rows: string[][] = [];
+
+    rows.push(["报告名称", report.name]);
+    rows.push(["报告类型", report.type]);
+    rows.push(["报告周期", report.period]);
+    rows.push(["质量分", String(report.score)]);
+    rows.push(["创建人", report.creator]);
+    rows.push(["创建时间", report.createdAt]);
+    rows.push([""]);
+
+    rows.push(["统计数据", ""]);
+    rows.push(["规则数", String(store.ruleStats().total)]);
+    rows.push(["任务数", String(store.taskStats().total)]);
+    rows.push(["异常数", String(store.anomalies.length)]);
+    rows.push(["工单数", String(store.ticketStats().total)]);
+    rows.push(["已解决工单", String(store.ticketStats().resolved + store.ticketStats().closed)]);
+
     const csvContent = "\uFEFF" + rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -271,19 +343,44 @@ export default function Reports() {
     },
     {
       label: "平均响应时间",
-      current: "4.2h",
-      previous: "5.8h",
+      current: `${avgResponseTime}h`,
+      previous: `${Math.round((avgResponseTime + 1.6) * 10) / 10}h`,
       change: "-27.6%",
       up: true,
     },
     {
       label: "重复问题率",
-      current: "3.8%",
-      previous: "5.2%",
+      current: `${duplicateIssueRate}%`,
+      previous: `${Math.round((duplicateIssueRate + 1.4) * 10) / 10}%`,
       change: "-26.9%",
       up: true,
     },
   ];
+
+  const currentFilterReport = useMemo(() => {
+    const deptLabel = selectedDept || "全部部门";
+    const sysLabel = selectedSystem || "全部系统";
+    const typeLabel = selectedRuleType
+      ? RULE_TYPE_OPTIONS.find((o) => o.value === selectedRuleType)?.label || "全部类型"
+      : "全部类型";
+    return {
+      name: `自定义报告_${deptLabel}_${sysLabel}_${typeLabel}`,
+      period: `近${timeRange}天`,
+      score: overallScore,
+      ruleCount: filteredRules.length,
+      anomalyCount: filteredAnomalies.length,
+      ticketCount: filteredTickets.length,
+    };
+  }, [
+    selectedDept,
+    selectedSystem,
+    selectedRuleType,
+    timeRange,
+    overallScore,
+    filteredRules,
+    filteredAnomalies,
+    filteredTickets,
+  ]);
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -295,17 +392,16 @@ export default function Reports() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button
+          <Button
             onClick={handleExportReport}
-            className="flex items-center gap-2 px-4 py-2.5 bg-navy-700 hover:bg-navy-800 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+            leftIcon={<Download className="w-4 h-4" />}
           >
-            <Download className="w-4 h-4" />
             导出报告
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-card border border-slate-100 p-5">
+      <div className="bg-slate-50/50 rounded-xl border border-slate-200 p-5">
         <div className="flex items-center gap-2 mb-4">
           <Filter className="w-4 h-4 text-slate-500" />
           <h3 className="font-semibold text-slate-800">筛选条件</h3>
@@ -316,7 +412,7 @@ export default function Reports() {
             <select
               value={selectedDept}
               onChange={(e) => setSelectedDept(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 bg-white"
             >
               <option value="">全部部门</option>
               {departments.map((d) => (
@@ -329,14 +425,14 @@ export default function Reports() {
           <div>
             <label className="text-xs text-slate-500 mb-1.5 block">系统</label>
             <select
-              value={selectedTopic}
-              onChange={(e) => setSelectedTopic(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
+              value={selectedSystem}
+              onChange={(e) => setSelectedSystem(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 bg-white"
             >
               <option value="">全部系统</option>
-              {topicOptions.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              {systems.map((s) => (
+                <option key={s} value={s}>
+                  {s}
                 </option>
               ))}
             </select>
@@ -346,7 +442,7 @@ export default function Reports() {
             <select
               value={selectedRuleType}
               onChange={(e) => setSelectedRuleType(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 bg-white"
             >
               <option value="">全部类型</option>
               {RULE_TYPE_OPTIONS.map((opt) => (
@@ -366,7 +462,7 @@ export default function Reports() {
                   className={`flex-1 px-3 py-2 text-xs rounded-lg font-medium transition-colors ${
                     timeRange === d
                       ? "bg-navy-600 text-white shadow-sm"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
                   }`}
                 >
                   近{d}天
@@ -448,6 +544,7 @@ export default function Reports() {
               <h3 className="font-semibold text-slate-800">问题类型分布</h3>
               <p className="text-xs text-slate-500 mt-0.5">按规则类型统计异常</p>
             </div>
+            <Badge variant="info">共 {filteredAnomalies.length} 个异常</Badge>
           </div>
           <DonutChart data={donutData} height={280} />
         </div>
@@ -465,7 +562,52 @@ export default function Reports() {
 
       <div className="bg-white rounded-xl shadow-card border border-slate-100 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="font-semibold text-slate-800">月度报告列表</h3>
+          <div>
+            <h3 className="font-semibold text-slate-800">当前筛选报告</h3>
+            <p className="text-xs text-slate-500 mt-0.5">基于当前筛选条件生成的实时报告</p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleExportReport}
+            leftIcon={<Download className="w-3.5 h-3.5" />}
+          >
+            导出CSV
+          </Button>
+        </div>
+        <div className="p-5">
+          <div className="bg-gradient-to-r from-navy-50 to-cyan-50 rounded-xl p-5 border border-navy-100">
+            <div className="flex items-start justify-between">
+              <div>
+                <h4 className="font-semibold text-slate-800 text-lg">{currentFilterReport.name}</h4>
+                <p className="text-sm text-slate-500 mt-1">报告周期：{currentFilterReport.period}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-3xl font-bold text-navy-700 tabular-nums">{currentFilterReport.score}</p>
+                <p className="text-xs text-slate-500 mt-1">综合质量分</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4 mt-5 pt-5 border-t border-navy-100">
+              <div className="text-center">
+                <p className="text-xl font-bold text-slate-700 tabular-nums">{currentFilterReport.ruleCount}</p>
+                <p className="text-xs text-slate-500 mt-1">规则数</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xl font-bold text-slate-700 tabular-nums">{currentFilterReport.anomalyCount}</p>
+                <p className="text-xs text-slate-500 mt-1">异常数</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xl font-bold text-slate-700 tabular-nums">{currentFilterReport.ticketCount}</p>
+                <p className="text-xs text-slate-500 mt-1">工单数</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-card border border-slate-100 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="font-semibold text-slate-800">报告列表</h3>
         </div>
         <div className="divide-y divide-slate-50">
           {monthlyReports.map((report) => (
@@ -502,24 +644,22 @@ export default function Reports() {
                     <h4 className="font-medium text-slate-800 truncate">
                       {report.name}
                     </h4>
-                    <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded flex-shrink-0">
-                      {report.type}
-                    </span>
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
+                    <Badge variant="default">{report.type}</Badge>
+                    <Badge
+                      variant={
                         report.status === "completed"
-                          ? "bg-success-50 text-success-700"
+                          ? "success"
                           : report.status === "generating"
-                          ? "bg-cyan-50 text-cyan-700"
-                          : "bg-slate-100 text-slate-600"
-                      }`}
+                          ? "info"
+                          : "default"
+                      }
                     >
                       {report.status === "completed"
                         ? "已完成"
                         : report.status === "generating"
                         ? "生成中"
                         : "待生成"}
-                    </span>
+                    </Badge>
                   </div>
                   <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
                     <span>周期: {report.period}</span>
@@ -538,13 +678,14 @@ export default function Reports() {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 {report.status === "completed" && (
-                  <button
+                  <Button
+                    size="sm"
+                    variant="outline"
                     onClick={() => handleDownloadReport(report)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 transition-colors"
+                    leftIcon={<Download className="w-3.5 h-3.5" />}
                   >
-                    <Download className="w-3.5 h-3.5" />
                     下载
-                  </button>
+                  </Button>
                 )}
                 <button className="p-2 text-slate-400 hover:text-navy-600 hover:bg-slate-100 rounded-lg transition-colors">
                   <ChevronRight className="w-4 h-4" />

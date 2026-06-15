@@ -16,9 +16,14 @@ import {
   FileText,
   Link2,
   ArrowRight,
+  Layers,
+  Database,
+  Tag,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import { useDQCStore } from "@/store/dqc";
-import { TaskStatus, Priority } from "@/data/types";
+import { TaskStatus, Priority, RuleStatus } from "@/data/types";
 import { Modal } from "@/components/ui/Modal";
 import { Drawer } from "@/components/ui/Drawer";
 import { Button } from "@/components/ui/Button";
@@ -86,6 +91,11 @@ const SEVERITY_CONFIG: Record<
   [Priority.Low]: { label: "低", className: "bg-slate-100 text-slate-600" },
 };
 
+const TRIGGER_TYPE_CONFIG = {
+  manual: { label: "手动任务", icon: Zap, bgClass: "bg-gold-50 text-gold-600" },
+  scheduled: { label: "定时任务", icon: CalendarClock, bgClass: "bg-navy-50 text-navy-600" },
+};
+
 function formatDateTime(iso?: string) {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -105,19 +115,6 @@ function formatDuration(start?: string, end?: string) {
   return `${m}分${String(sec).padStart(2, "0")}秒`;
 }
 
-function isScheduledTask(frequency: string) {
-  const lower = frequency.toLowerCase();
-  return (
-    lower.includes("每日") ||
-    lower.includes("每小时") ||
-    lower.includes("每30分钟") ||
-    lower.includes("每2小时") ||
-    lower.includes("每周") ||
-    lower.includes("每月") ||
-    lower.includes("cron")
-  );
-}
-
 type FilterStatus = "all" | TaskStatus;
 
 export default function Tasks() {
@@ -132,6 +129,11 @@ export default function Tasks() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
+  const enabledRules = useMemo(
+    () => store.rules.filter((r) => r.status === RuleStatus.Enabled),
+    [store.rules]
+  );
+
   const filteredTasks = useMemo(() => {
     let result = store.tasks;
     if (filterStatus !== "all") {
@@ -139,24 +141,54 @@ export default function Tasks() {
     }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      result = result.filter(
-        (t) =>
-          t.name.toLowerCase().includes(q) ||
-          t.id.toLowerCase().includes(q)
-      );
+      result = result.filter((t) => t.name.toLowerCase().includes(q));
     }
     return result;
   }, [store.tasks, filterStatus, searchQuery]);
 
   const selectedTask = selectedTaskId ? store.getTaskById(selectedTaskId) : null;
-  const selectedTaskAnomalies = selectedTaskId ? store.getAnomaliesByTaskId(selectedTaskId) : [];
-  const selectedTaskRule = selectedTask ? store.getRuleById(selectedTask.ruleId) : null;
-  const selectedTaskTopic = selectedTaskRule ? store.getTopicById(selectedTaskRule.topicId) : null;
+  const selectedTaskAnomalies = selectedTaskId
+    ? store.getAnomaliesByTaskId(selectedTaskId)
+    : [];
+
+  const selectedTaskRules = useMemo(() => {
+    if (!selectedTask) return [];
+    return selectedTask.ruleIds
+      .map((id) => store.getRuleById(id))
+      .filter((r) => r !== undefined);
+  }, [selectedTask, store]);
+
+  const selectedTaskTopics = useMemo(() => {
+    if (!selectedTaskRules.length) return [];
+    const topicIds = [...new Set(selectedTaskRules.map((r) => r.topicId))];
+    return topicIds.map((id) => store.getTopicById(id)).filter((t) => t !== undefined);
+  }, [selectedTaskRules, store]);
+
+  const selectedTaskSystems = useMemo(() => {
+    if (!selectedTaskTopics.length) return [];
+    return [...new Set(selectedTaskTopics.map((t) => t.system))];
+  }, [selectedTaskTopics]);
+
+  const ruleAnomalyCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    selectedTaskAnomalies.forEach((a) => {
+      counts[a.ruleId] = (counts[a.ruleId] || 0) + 1;
+    });
+    return counts;
+  }, [selectedTaskAnomalies]);
 
   const toggleRuleSelection = (ruleId: string) => {
     setSelectedRuleIds((prev) =>
       prev.includes(ruleId) ? prev.filter((id) => id !== ruleId) : [...prev, ruleId]
     );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedRuleIds.length === enabledRules.length) {
+      setSelectedRuleIds([]);
+    } else {
+      setSelectedRuleIds(enabledRules.map((r) => r.id));
+    }
   };
 
   const handleCreateTask = () => {
@@ -167,8 +199,6 @@ export default function Tasks() {
     setTaskName("");
     setTriggerType("manual");
   };
-
-  const enabledRules = store.rules.filter((r) => r.status === "enabled");
 
   const filterTabs: { key: FilterStatus; label: string; count: number }[] = [
     { key: "all", label: "全部", count: stats.total },
@@ -231,7 +261,7 @@ export default function Tasks() {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="搜索任务名称、ID..."
+              placeholder="搜索任务名称..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-400"
@@ -265,8 +295,8 @@ export default function Tasks() {
           <div className="divide-y divide-slate-50">
             {filteredTasks.map((task) => {
               const config = STATUS_CONFIG[task.status];
-              const rule = store.getRuleById(task.ruleId);
-              const isScheduled = rule ? isScheduledTask(rule.frequency) : false;
+              const triggerCfg = TRIGGER_TYPE_CONFIG[task.triggerType];
+              const TriggerIcon = triggerCfg.icon;
               const isRunning = task.status === TaskStatus.Running;
 
               return (
@@ -284,24 +314,16 @@ export default function Tasks() {
                       <Badge variant={config.badgeVariant} withDot>
                         {config.label}
                       </Badge>
-                      <span className="font-mono text-xs text-slate-400">
-                        {task.id}
-                      </span>
                       <span
                         className={cn(
                           "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium",
-                          isScheduled
-                            ? "bg-navy-50 text-navy-600"
-                            : "bg-gold-50 text-gold-600"
+                          triggerCfg.bgClass
                         )}
                       >
-                        {isScheduled ? (
-                          <CalendarClock className="w-3 h-3" />
-                        ) : (
-                          <Zap className="w-3 h-3" />
-                        )}
-                        {isScheduled ? "定时任务" : "临时任务"}
+                        <TriggerIcon className="w-3 h-3" />
+                        {triggerCfg.label}
                       </span>
+                      <span className="font-mono text-xs text-slate-400">{task.id}</span>
                       {task.anomalyCount > 0 && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-danger-50 text-danger-600">
                           <AlertTriangle className="w-3 h-3" />
@@ -332,6 +354,10 @@ export default function Tasks() {
                     </div>
 
                     <div className="flex items-center gap-5 text-xs text-slate-500 flex-wrap">
+                      <span className="flex items-center gap-1">
+                        <Layers className="w-3 h-3" />
+                        规则数: {task.ruleIds.length}
+                      </span>
                       <span>开始: {formatDateTime(task.startedAt)}</span>
                       <span>结束: {formatDateTime(task.finishedAt)}</span>
                       <span className="flex items-center gap-1">
@@ -339,12 +365,18 @@ export default function Tasks() {
                         耗时: {formatDuration(task.startedAt, task.finishedAt)}
                       </span>
                       {task.recordCount > 0 && (
-                        <span>数据量: {task.recordCount.toLocaleString()}</span>
+                        <span className="flex items-center gap-1">
+                          <Database className="w-3 h-3" />
+                          数据量: {task.recordCount.toLocaleString()}
+                        </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 px-4" onClick={(e) => e.stopPropagation()}>
+                  <div
+                    className="flex items-center gap-2 px-4"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {isRunning && (
                       <Button
                         size="sm"
@@ -352,7 +384,7 @@ export default function Tasks() {
                         leftIcon={<Play className="w-3.5 h-3.5" />}
                         onClick={() => store.simulateTaskProgress(task.id)}
                       >
-                        推进
+                        模拟推进
                       </Button>
                     )}
                     <button
@@ -409,17 +441,17 @@ export default function Tasks() {
               触发类型
             </label>
             <div className="flex gap-3">
-              {([
+              {[
                 { value: "manual" as const, label: "手动触发", icon: Zap },
                 { value: "scheduled" as const, label: "定时调度", icon: CalendarClock },
-              ]).map((opt) => {
+              ].map((opt) => {
                 const Icon = opt.icon;
                 return (
                   <button
                     key={opt.value}
                     onClick={() => setTriggerType(opt.value)}
                     className={cn(
-                      "flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                      "flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-medium transition-all flex-1",
                       triggerType === opt.value
                         ? "border-navy-400 bg-navy-50 text-navy-700 ring-2 ring-navy-500/20"
                         : "border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50"
@@ -434,42 +466,69 @@ export default function Tasks() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              选择规则 <span className="text-danger-500">*</span>
-              <span className="text-xs text-slate-400 font-normal ml-2">
-                已选 {selectedRuleIds.length} 项
-              </span>
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-sm font-medium text-slate-700">
+                选择规则 <span className="text-danger-500">*</span>
+              </label>
+              <button
+                onClick={toggleSelectAll}
+                className="text-xs text-navy-600 hover:text-navy-800 font-medium flex items-center gap-1"
+              >
+                {selectedRuleIds.length === enabledRules.length ? (
+                  <>
+                    <CheckSquare className="w-3.5 h-3.5" />
+                    取消全选
+                  </>
+                ) : (
+                  <>
+                    <Square className="w-3.5 h-3.5" />
+                    全选
+                  </>
+                )}
+              </button>
+            </div>
             <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
-              {enabledRules.map((rule) => {
-                const checked = selectedRuleIds.includes(rule.id);
-                return (
-                  <label
-                    key={rule.id}
-                    className={cn(
-                      "flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors",
-                      checked ? "bg-navy-50/60" : "hover:bg-slate-50"
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleRuleSelection(rule.id)}
-                      className="w-4 h-4 rounded border-slate-300 text-navy-600 focus:ring-navy-500"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-slate-800 font-medium truncate">
-                        {rule.name}
+              {enabledRules.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 text-sm">
+                  暂无启用的规则
+                </div>
+              ) : (
+                enabledRules.map((rule) => {
+                  const checked = selectedRuleIds.includes(rule.id);
+                  const topic = store.getTopicById(rule.topicId);
+                  return (
+                    <label
+                      key={rule.id}
+                      className={cn(
+                        "flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors",
+                        checked ? "bg-navy-50/60" : "hover:bg-slate-50"
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleRuleSelection(rule.id)}
+                        className="w-4 h-4 rounded border-slate-300 text-navy-600 focus:ring-navy-500"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-slate-800 font-medium truncate">
+                          {rule.name}
+                        </div>
+                        <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-cyan-50 text-cyan-600 rounded">
+                            {store.RULE_TYPE_LABELS[rule.type]}
+                          </span>
+                          <span>·</span>
+                          <span className="truncate">{topic?.name || "-"}</span>
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5">
-                        <span>{store.RULE_TYPE_LABELS[rule.type]}</span>
-                        <span>·</span>
-                        <span>{rule.frequency}</span>
-                      </div>
-                    </div>
-                  </label>
-                );
-              })}
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              已选 <span className="font-medium text-navy-600">{selectedRuleIds.length}</span> 条规则
             </div>
           </div>
         </div>
@@ -484,17 +543,49 @@ export default function Tasks() {
         {selectedTask && (
           <div className="space-y-6">
             <div>
-              <div className="flex items-center gap-3 mb-4">
+              <div className="flex items-center gap-3 mb-3 flex-wrap">
                 <Badge variant={STATUS_CONFIG[selectedTask.status].badgeVariant} withDot>
                   {STATUS_CONFIG[selectedTask.status].label}
                 </Badge>
-                <span className="font-mono text-xs text-slate-400">
-                  {selectedTask.id}
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium",
+                    TRIGGER_TYPE_CONFIG[selectedTask.triggerType].bgClass
+                  )}
+                >
+                  {(() => {
+                    const Icon = TRIGGER_TYPE_CONFIG[selectedTask.triggerType].icon;
+                    return <Icon className="w-3 h-3" />;
+                  })()}
+                  {TRIGGER_TYPE_CONFIG[selectedTask.triggerType].label}
                 </span>
+                <span className="font-mono text-xs text-slate-400">{selectedTask.id}</span>
               </div>
-              <h2 className="text-lg font-bold text-slate-800 mb-4">
-                {selectedTask.name}
-              </h2>
+              <h2 className="text-lg font-bold text-slate-800 mb-4">{selectedTask.name}</h2>
+
+              <div className="mb-4">
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="text-slate-500">执行进度</span>
+                  <span
+                    className={cn(
+                      "font-medium tabular-nums",
+                      STATUS_CONFIG[selectedTask.status].color
+                    )}
+                  >
+                    {selectedTask.progress}%
+                  </span>
+                </div>
+                <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-700 ease-out",
+                      STATUS_CONFIG[selectedTask.status].progressColor,
+                      selectedTask.status === TaskStatus.Running && "animate-pulse"
+                    )}
+                    style={{ width: `${selectedTask.progress}%` }}
+                  />
+                </div>
+              </div>
 
               <div className="grid grid-cols-2 gap-3">
                 {[
@@ -505,8 +596,8 @@ export default function Tasks() {
                     value: formatDuration(selectedTask.startedAt, selectedTask.finishedAt),
                   },
                   {
-                    label: "执行进度",
-                    value: `${selectedTask.progress}%`,
+                    label: "规则数量",
+                    value: `${selectedTask.ruleIds.length} 条`,
                   },
                 ].map((item) => (
                   <div
@@ -518,23 +609,52 @@ export default function Tasks() {
                   </div>
                 ))}
               </div>
-
-              {selectedTask.status === TaskStatus.Running && (
-                <div className="mt-3">
-                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-500 transition-all duration-700 ease-out animate-pulse"
-                      style={{ width: `${selectedTask.progress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
+
+            {selectedTask.status === TaskStatus.Running && (
+              <div className="flex items-center gap-3">
+                <Button
+                  size="sm"
+                  leftIcon={<Play className="w-3.5 h-3.5" />}
+                  onClick={() => store.simulateTaskProgress(selectedTask.id)}
+                >
+                  模拟推进进度
+                </Button>
+                <span className="text-xs text-slate-400">点击推进任务执行进度</span>
+              </div>
+            )}
 
             <div>
               <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-cyan-500" />
-                影响范围统计
+                规则汇总
+              </h3>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-navy-50/50 border border-navy-100 rounded-lg px-3 py-3 text-center">
+                  <p className="text-xl font-bold text-navy-700 tabular-nums">
+                    {selectedTask.ruleIds.length}
+                  </p>
+                  <p className="text-xs text-navy-600 mt-0.5">涉及规则</p>
+                </div>
+                <div className="bg-cyan-50/50 border border-cyan-100 rounded-lg px-3 py-3 text-center">
+                  <p className="text-xl font-bold text-cyan-700 tabular-nums">
+                    {selectedTaskTopics.length}
+                  </p>
+                  <p className="text-xs text-cyan-600 mt-0.5">涉及主题</p>
+                </div>
+                <div className="bg-gold-50/50 border border-gold-100 rounded-lg px-3 py-3 text-center">
+                  <p className="text-xl font-bold text-gold-700 tabular-nums">
+                    {selectedTaskSystems.length}
+                  </p>
+                  <p className="text-xs text-gold-600 mt-0.5">关联系统</p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                <Database className="w-4 h-4 text-cyan-500" />
+                影响范围
               </h3>
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-cyan-50/50 border border-cyan-100 rounded-lg px-4 py-3">
@@ -552,43 +672,84 @@ export default function Tasks() {
               </div>
             </div>
 
-            {selectedTaskTopic && (
+            <div>
+              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-navy-500" />
+                涉及规则列表
+                <span className="text-xs font-normal text-slate-400">
+                  ({selectedTaskRules.length} 条)
+                </span>
+              </h3>
+              <div className="space-y-2">
+                {selectedTaskRules.map((rule) => {
+                  const topic = store.getTopicById(rule.topicId);
+                  const anomalyCount = ruleAnomalyCounts[rule.id] || 0;
+                  return (
+                    <div
+                      key={rule.id}
+                      className="bg-slate-50 rounded-lg px-3 py-2.5 flex items-center justify-between gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800 truncate">
+                          {rule.name}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[11px] px-1.5 py-0.5 bg-cyan-50 text-cyan-600 rounded">
+                            {store.RULE_TYPE_LABELS[rule.type]}
+                          </span>
+                          <span className="text-xs text-slate-400 truncate">
+                            {topic?.name || "-"}
+                          </span>
+                        </div>
+                      </div>
+                      {selectedTask.status === TaskStatus.Success && (
+                        <span
+                          className={cn(
+                            "text-xs font-medium tabular-nums shrink-0",
+                            anomalyCount > 0 ? "text-danger-600" : "text-success-600"
+                          )}
+                        >
+                          {anomalyCount} 个异常
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {selectedTaskTopics.length > 0 && (
               <div>
                 <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                  <Link2 className="w-4 h-4 text-navy-500" />
-                  关联主题
+                  <Tag className="w-4 h-4 text-navy-500" />
+                  涉及主题列表
+                  <span className="text-xs font-normal text-slate-400">
+                    ({selectedTaskTopics.length} 个)
+                  </span>
                 </h3>
-                <div className="bg-navy-50/50 border border-navy-100 rounded-lg px-4 py-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-navy-800">
-                      {selectedTaskTopic.name}
-                    </p>
-                    <p className="text-xs text-navy-500 mt-0.5">
-                      {selectedTaskTopic.description}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xl font-bold text-navy-700 tabular-nums">
-                      {selectedTaskTopic.score}
-                    </p>
-                    <p className="text-xs text-navy-400">质量得分</p>
-                  </div>
+                <div className="space-y-2">
+                  {selectedTaskTopics.map((topic) => (
+                    <div
+                      key={topic.id}
+                      className="bg-navy-50/30 border border-navy-100 rounded-lg px-3 py-2.5 flex items-center justify-between gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-navy-800 truncate">
+                          {topic.name}
+                        </p>
+                        <p className="text-xs text-navy-500 mt-0.5 truncate">
+                          {topic.system}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-lg font-bold text-navy-700 tabular-nums">
+                          {topic.score}
+                        </p>
+                        <p className="text-[11px] text-navy-400">质量分</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            )}
-
-            {selectedTask.status === TaskStatus.Running && (
-              <div className="flex items-center gap-3">
-                <Button
-                  size="sm"
-                  leftIcon={<Play className="w-3.5 h-3.5" />}
-                  onClick={() => store.simulateTaskProgress(selectedTask.id)}
-                >
-                  模拟推进进度
-                </Button>
-                <span className="text-xs text-slate-400">
-                  点击推进任务执行进度
-                </span>
               </div>
             )}
 
@@ -618,6 +779,12 @@ export default function Tasks() {
                         <th className="text-left px-3 py-2.5 text-xs font-medium text-slate-500">
                           数据标识
                         </th>
+                        <th className="text-left px-3 py-2.5 text-xs font-medium text-slate-500">
+                          所属规则
+                        </th>
+                        <th className="text-left px-3 py-2.5 text-xs font-medium text-slate-500">
+                          所属主题
+                        </th>
                         <th className="text-center px-3 py-2.5 text-xs font-medium text-slate-500">
                           严重程度
                         </th>
@@ -629,13 +796,21 @@ export default function Tasks() {
                     <tbody className="divide-y divide-slate-100">
                       {selectedTaskAnomalies.map((anomaly) => {
                         const severity = SEVERITY_CONFIG[anomaly.severity];
+                        const rule = store.getRuleById(anomaly.ruleId);
+                        const topic = store.getTopicById(anomaly.topicId);
                         return (
                           <tr key={anomaly.id} className="hover:bg-slate-50/50">
-                            <td className="px-3 py-2.5 text-slate-700 max-w-[200px] truncate">
+                            <td className="px-3 py-2.5 text-slate-700 max-w-[180px] truncate">
                               {anomaly.description}
                             </td>
                             <td className="px-3 py-2.5 font-mono text-xs text-slate-500">
                               {anomaly.dataKey}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-600 max-w-[120px] truncate text-xs">
+                              {rule?.name || "-"}
+                            </td>
+                            <td className="px-3 py-2.5 text-slate-600 max-w-[100px] truncate text-xs">
+                              {topic?.name || "-"}
                             </td>
                             <td className="px-3 py-2.5 text-center">
                               <span

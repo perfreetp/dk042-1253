@@ -108,6 +108,10 @@ export interface BusinessTopic {
   name: string;
   /** 主题描述 */
   description: string;
+  /** 所属系统 */
+  system: string;
+  /** 所属部门 */
+  department: string;
   /** 质量分数 (0-100) */
   score: number;
   /** 质量等级 */
@@ -138,12 +142,14 @@ export interface QualityRule {
   topicId: string;
   /** 阈值配置 */
   threshold: {
-    /** 最小值 */
+    /** 最小值（准确性、及时性范围校验用） */
     min?: number;
-    /** 最大值 */
+    /** 最大值（准确性、及时性范围校验用） */
     max?: number;
-    /** 目标值 */
+    /** 目标合格率阈值 */
     target?: number;
+    /** 告警阈值（低于此值触发告警） */
+    warning?: number;
   };
   /** 规则状态 */
   status: RuleStatus;
@@ -158,6 +164,11 @@ export interface QualityRule {
 }
 
 /**
+ * 任务触发类型
+ */
+export type TaskTriggerType = 'manual' | 'scheduled';
+
+/**
  * 检查任务接口
  */
 export interface CheckTask {
@@ -165,8 +176,10 @@ export interface CheckTask {
   id: string;
   /** 任务名称 */
   name: string;
-  /** 关联规则ID */
-  ruleId: string;
+  /** 关联规则ID列表（支持多规则） */
+  ruleIds: string[];
+  /** 触发类型 */
+  triggerType: TaskTriggerType;
   /** 任务状态 */
   status: TaskStatus;
   /** 执行进度 (0-100) */

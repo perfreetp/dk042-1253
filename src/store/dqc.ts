@@ -45,6 +45,27 @@ const PRIORITY_LABELS: Record<Priority, string> = {
   [Priority.Low]: '低',
 };
 
+interface FilteredStats {
+  overallScore: number;
+  ruleCount: number;
+  taskCount: number;
+  anomalyCount: number;
+  ticketStats: {
+    total: number;
+    open: number;
+    inProgress: number;
+    pendingReview: number;
+    resolved: number;
+    closed: number;
+  };
+  topicScores: {
+    topicId: string;
+    topicName: string;
+    score: number;
+  }[];
+  trendData: QualityTrendPoint[];
+}
+
 interface DQCStore {
   rules: QualityRule[];
   tasks: CheckTask[];
@@ -65,9 +86,15 @@ interface DQCStore {
   getAnomaliesByTicketId: (ticketId: string) => AnomalyRecord[];
   getActivitiesByTicketId: (ticketId: string) => TicketActivity[];
 
+  getTopicsByDepartment: (dept: string) => BusinessTopic[];
+  getTopicsBySystem: (sys: string) => BusinessTopic[];
+  getRulesByTopicIds: (topicIds: string[]) => QualityRule[];
+  getAnomaliesByRuleIds: (ruleIds: string[]) => AnomalyRecord[];
+
   toggleRuleStatus: (ruleId: string) => void;
   updateRuleThreshold: (ruleId: string, target: number) => void;
   updateRuleWarningThreshold: (ruleId: string, warning: number) => void;
+  updateRuleThresholdFull: (ruleId: string, thresholds: { min?: number; max?: number; target?: number; warning?: number }) => void;
 
   createTask: (ruleIds: string[], name: string, triggerType: 'manual' | 'scheduled') => string;
   simulateTaskProgress: (taskId: string) => void;
@@ -83,6 +110,8 @@ interface DQCStore {
   taskStats: () => { total: number; running: number; success: number; failed: number; pending: number };
   ticketStats: () => { total: number; open: number; inProgress: number; pendingReview: number; resolved: number; closed: number };
   overallQualityScore: () => number;
+
+  getFilteredStats: (filters: { department?: string; system?: string; ruleType?: RuleType }) => FilteredStats;
 
   RULE_TYPE_LABELS: typeof RULE_TYPE_LABELS;
   TICKET_STATUS_LABELS: typeof TICKET_STATUS_LABELS;
@@ -109,6 +138,11 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
   getAnomaliesByTicketId: (ticketId) => get().anomalies.filter((a) => a.ticketId === ticketId),
   getActivitiesByTicketId: (ticketId) => get().ticketActivities.filter((a) => a.ticketId === ticketId),
 
+  getTopicsByDepartment: (dept) => get().topics.filter((t) => t.department === dept),
+  getTopicsBySystem: (sys) => get().topics.filter((t) => t.system === sys),
+  getRulesByTopicIds: (topicIds) => get().rules.filter((r) => topicIds.includes(r.topicId)),
+  getAnomaliesByRuleIds: (ruleIds) => get().anomalies.filter((a) => ruleIds.includes(a.ruleId)),
+
   toggleRuleStatus: (ruleId) =>
     set((state) => ({
       rules: state.rules.map((r) =>
@@ -128,20 +162,38 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
   updateRuleWarningThreshold: (ruleId, warning) =>
     set((state) => ({
       rules: state.rules.map((r) =>
-        r.id === ruleId ? { ...r, threshold: { ...r.threshold, min: warning } } : r
+        r.id === ruleId ? { ...r, threshold: { ...r.threshold, warning } } : r
+      ),
+    })),
+
+  updateRuleThresholdFull: (ruleId, thresholds) =>
+    set((state) => ({
+      rules: state.rules.map((r) =>
+        r.id === ruleId
+          ? {
+              ...r,
+              threshold: {
+                ...r.threshold,
+                ...(thresholds.min !== undefined ? { min: thresholds.min } : {}),
+                ...(thresholds.max !== undefined ? { max: thresholds.max } : {}),
+                ...(thresholds.target !== undefined ? { target: thresholds.target } : {}),
+                ...(thresholds.warning !== undefined ? { warning: thresholds.warning } : {}),
+              },
+            }
+          : r
       ),
     })),
 
   createTask: (ruleIds, name, triggerType) => {
     const id = `task_${Date.now()}`;
-    const ruleId = ruleIds[0];
     const now = new Date().toISOString();
     set((state) => ({
       tasks: [
         {
           id,
           name,
-          ruleId,
+          ruleIds,
+          triggerType,
           status: TaskStatus.Running,
           progress: 0,
           startedAt: now,
@@ -175,24 +227,27 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
     })),
 
   assignTicket: (ticketId, assigneeId) =>
-    set((state) => ({
-      tickets: state.tickets.map((t) =>
-        t.id === ticketId
-          ? { ...t, assigneeId, status: TicketStatus.InProgress, updatedAt: new Date().toISOString() }
-          : t
-      ),
-      ticketActivities: [
-        ...state.ticketActivities,
-        {
-          id: `act_${Date.now()}`,
-          ticketId,
-          type: 'assignment' as const,
-          content: `工单已分派给 ${state.users.find((u) => u.id === assigneeId)?.name || assigneeId}`,
-          operatorId: 'u001',
-          createdAt: new Date().toISOString(),
-        },
-      ],
-    })),
+    set((state) => {
+      const assigneeName = state.users.find((u) => u.id === assigneeId)?.name || assigneeId;
+      return {
+        tickets: state.tickets.map((t) =>
+          t.id === ticketId
+            ? { ...t, assigneeId, updatedAt: new Date().toISOString() }
+            : t
+        ),
+        ticketActivities: [
+          ...state.ticketActivities,
+          {
+            id: `act_${Date.now()}`,
+            ticketId,
+            type: 'assignment' as const,
+            content: `工单已分派给 ${assigneeName}`,
+            operatorId: 'u001',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+    }),
 
   startProcessing: (ticketId) =>
     set((state) => {
@@ -219,6 +274,37 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
     }),
 
   submitResolution: (ticketId, result) =>
+    set((state) => {
+      const ticket = state.tickets.find((t) => t.id === ticketId);
+      return {
+        tickets: state.tickets.map((t) =>
+          t.id === ticketId
+            ? { ...t, status: TicketStatus.PendingReview, updatedAt: new Date().toISOString() }
+            : t
+        ),
+        ticketActivities: [
+          ...state.ticketActivities,
+          {
+            id: `act_${Date.now()}`,
+            ticketId,
+            type: 'comment' as const,
+            content: `提交处理结果: ${result}`,
+            operatorId: ticket?.assigneeId || 'u001',
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: `act_${Date.now()}_status`,
+            ticketId,
+            type: 'status_change' as const,
+            content: '工单状态变更为待复检',
+            operatorId: ticket?.assigneeId || 'u001',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+    }),
+
+  requestReview: (ticketId) =>
     set((state) => ({
       tickets: state.tickets.map((t) =>
         t.id === ticketId
@@ -230,21 +316,12 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
         {
           id: `act_${Date.now()}`,
           ticketId,
-          type: 'comment' as const,
-          content: `提交处理结果: ${result}`,
-          operatorId: state.tickets.find((t) => t.id === ticketId)?.assigneeId || 'u001',
+          type: 'status_change' as const,
+          content: '申请复检，工单状态变更为待复检',
+          operatorId: 'u001',
           createdAt: new Date().toISOString(),
         },
       ],
-    })),
-
-  requestReview: (ticketId) =>
-    set((state) => ({
-      tickets: state.tickets.map((t) =>
-        t.id === ticketId
-          ? { ...t, status: TicketStatus.PendingReview, updatedAt: new Date().toISOString() }
-          : t
-      ),
     })),
 
   approveReview: (ticketId) =>
@@ -324,6 +401,67 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
     const { topics } = get();
     if (topics.length === 0) return 0;
     return Math.round(topics.reduce((sum, t) => sum + t.score, 0) / topics.length * 10) / 10;
+  },
+
+  getFilteredStats: (filters) => {
+    const { topics, rules, tasks, anomalies, tickets, trendData } = get();
+    const { department, system, ruleType } = filters;
+
+    let filteredTopics = [...topics];
+    if (department) {
+      filteredTopics = filteredTopics.filter((t) => t.department === department);
+    }
+    if (system) {
+      filteredTopics = filteredTopics.filter((t) => t.system === system);
+    }
+
+    const topicIds = filteredTopics.map((t) => t.id);
+
+    let filteredRules = rules.filter((r) => topicIds.includes(r.topicId));
+    if (ruleType) {
+      filteredRules = filteredRules.filter((r) => r.type === ruleType);
+    }
+
+    const ruleIds = filteredRules.map((r) => r.id);
+
+    const filteredAnomalies = anomalies.filter((a) => ruleIds.includes(a.ruleId));
+
+    const filteredTasks = tasks.filter((t) => {
+      const taskRuleIds = (t as any).ruleId ? [(t as any).ruleId] : (t.ruleIds || []);
+      return taskRuleIds.some((rid: string) => ruleIds.includes(rid));
+    });
+
+    const filteredTickets = tickets.filter((t) => topicIds.includes(t.topicId));
+
+    const overallScore =
+      filteredTopics.length > 0
+        ? Math.round(filteredTopics.reduce((sum, t) => sum + t.score, 0) / filteredTopics.length * 10) / 10
+        : 0;
+
+    const ticketStatsResult = {
+      total: filteredTickets.length,
+      open: filteredTickets.filter((t) => t.status === TicketStatus.Open).length,
+      inProgress: filteredTickets.filter((t) => t.status === TicketStatus.InProgress).length,
+      pendingReview: filteredTickets.filter((t) => t.status === TicketStatus.PendingReview).length,
+      resolved: filteredTickets.filter((t) => t.status === TicketStatus.Resolved).length,
+      closed: filteredTickets.filter((t) => t.status === TicketStatus.Closed).length,
+    };
+
+    const topicScores = filteredTopics.map((t) => ({
+      topicId: t.id,
+      topicName: t.name,
+      score: t.score,
+    }));
+
+    return {
+      overallScore,
+      ruleCount: filteredRules.length,
+      taskCount: filteredTasks.length,
+      anomalyCount: filteredAnomalies.length,
+      ticketStats: ticketStatsResult,
+      topicScores,
+      trendData,
+    };
   },
 
   RULE_TYPE_LABELS,

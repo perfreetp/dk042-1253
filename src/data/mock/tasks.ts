@@ -8,7 +8,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task001',
     name: '客户姓名必填校验 - 每日巡检',
-    ruleId: 'r001',
+    ruleIds: ['r001'],
+    triggerType: 'scheduled',
     status: TaskStatus.Pending,
     progress: 0,
     recordCount: 0,
@@ -18,7 +19,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task002',
     name: '商品编码完整性检查 - 每日巡检',
-    ruleId: 'r003',
+    ruleIds: ['r003'],
+    triggerType: 'scheduled',
     status: TaskStatus.Pending,
     progress: 0,
     recordCount: 0,
@@ -28,7 +30,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task003',
     name: '订单库存一致性校验',
-    ruleId: 'r012',
+    ruleIds: ['r012'],
+    triggerType: 'manual',
     status: TaskStatus.Pending,
     progress: 0,
     recordCount: 0,
@@ -40,7 +43,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task004',
     name: '订单金额必填校验 - 小时级检查',
-    ruleId: 'r002',
+    ruleIds: ['r002'],
+    triggerType: 'scheduled',
     status: TaskStatus.Running,
     progress: 45,
     startedAt: '2026-06-15T08:00:00Z',
@@ -51,7 +55,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task005',
     name: '订单创建及时性检查',
-    ruleId: 'r013',
+    ruleIds: ['r013'],
+    triggerType: 'scheduled',
     status: TaskStatus.Running,
     progress: 72,
     startedAt: '2026-06-15T08:30:00Z',
@@ -62,7 +67,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task006',
     name: '售后响应及时性检查',
-    ruleId: 'r016',
+    ruleIds: ['r016'],
+    triggerType: 'scheduled',
     status: TaskStatus.Running,
     progress: 28,
     startedAt: '2026-06-15T08:05:00Z',
@@ -75,7 +81,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task007',
     name: '客户邮箱格式校验 - 昨日巡检',
-    ruleId: 'r005',
+    ruleIds: ['r005'],
+    triggerType: 'scheduled',
     status: TaskStatus.Success,
     progress: 100,
     startedAt: '2026-06-14T02:30:00Z',
@@ -87,7 +94,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task008',
     name: '订单客户一致性校验',
-    ruleId: 'r009',
+    ruleIds: ['r009'],
+    triggerType: 'manual',
     status: TaskStatus.Success,
     progress: 100,
     startedAt: '2026-06-14T01:00:00Z',
@@ -99,7 +107,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task009',
     name: '财务借贷平衡检查',
-    ruleId: 'r011',
+    ruleIds: ['r011'],
+    triggerType: 'scheduled',
     status: TaskStatus.Success,
     progress: 100,
     startedAt: '2026-06-14T07:00:00Z',
@@ -111,7 +120,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task010',
     name: '订单号唯一性校验',
-    ruleId: 'r018',
+    ruleIds: ['r018'],
+    triggerType: 'scheduled',
     status: TaskStatus.Success,
     progress: 100,
     startedAt: '2026-06-14T08:00:00Z',
@@ -123,7 +133,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task011',
     name: '商品分类一致性检查',
-    ruleId: 'r010',
+    ruleIds: ['r010'],
+    triggerType: 'scheduled',
     status: TaskStatus.Success,
     progress: 100,
     startedAt: '2026-06-14T03:30:00Z',
@@ -137,7 +148,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task012',
     name: '订单金额范围校验',
-    ruleId: 'r006',
+    ruleIds: ['r006'],
+    triggerType: 'scheduled',
     status: TaskStatus.Failed,
     progress: 68,
     startedAt: '2026-06-15T06:00:00Z',
@@ -149,7 +161,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task013',
     name: '库存数量准确性检查',
-    ruleId: 'r008',
+    ruleIds: ['r008'],
+    triggerType: 'scheduled',
     status: TaskStatus.Failed,
     progress: 35,
     startedAt: '2026-06-14T05:00:00Z',
@@ -161,7 +174,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task014',
     name: '物流信息更新及时性检查',
-    ruleId: 'r015',
+    ruleIds: ['r015'],
+    triggerType: 'scheduled',
     status: TaskStatus.Failed,
     progress: 82,
     startedAt: '2026-06-15T06:00:00Z',
@@ -173,7 +187,8 @@ export const tasks: CheckTask[] = [
   {
     id: 'task015',
     name: '客户手机号唯一性检查',
-    ruleId: 'r017',
+    ruleIds: ['r017'],
+    triggerType: 'scheduled',
     status: TaskStatus.Failed,
     progress: 12,
     startedAt: '2026-06-14T02:15:00Z',
@@ -195,5 +210,5 @@ export const getTaskById = (id: string): CheckTask | undefined => {
  * 根据规则ID获取任务列表
  */
 export const getTasksByRuleId = (ruleId: string): CheckTask[] => {
-  return tasks.filter((t) => t.ruleId === ruleId);
+  return tasks.filter((t) => t.ruleIds.includes(ruleId));
 };
