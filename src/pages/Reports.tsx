@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { FileBarChart, Download, ChevronRight, Filter, TrendingUp, TrendingDown, FileQuestion } from "lucide-react";
+import { FileBarChart, Download, ChevronRight, ChevronDown, Table2, Filter, TrendingUp, TrendingDown, FileQuestion } from "lucide-react";
 import { useDQCStore } from "@/store/dqc";
-import { RuleType } from "@/data/types";
+import { RuleType, RuleStatus, TicketStatus, Priority } from "@/data/types";
 import TrendLineChart from "@/components/charts/TrendLineChart";
 import HorizontalBarChart from "@/components/charts/HorizontalBarChart";
 import DonutChart from "@/components/charts/DonutChart";
@@ -20,6 +20,48 @@ const RULE_TYPE_OPTIONS = [
   { value: RuleType.Timeliness, label: "及时性" },
   { value: RuleType.Uniqueness, label: "唯一性" },
 ];
+
+const RULE_STATUS_LABEL: Record<string, string> = {
+  [RuleStatus.Enabled]: "已启用",
+  [RuleStatus.Disabled]: "已禁用",
+  [RuleStatus.Pending]: "待审核",
+};
+
+const RULE_STATUS_VARIANT: Record<string, "success" | "danger" | "warning"> = {
+  [RuleStatus.Enabled]: "success",
+  [RuleStatus.Disabled]: "danger",
+  [RuleStatus.Pending]: "warning",
+};
+
+const TICKET_STATUS_LABEL: Record<string, string> = {
+  [TicketStatus.Open]: "待处理",
+  [TicketStatus.InProgress]: "处理中",
+  [TicketStatus.PendingReview]: "待验证",
+  [TicketStatus.Resolved]: "已解决",
+  [TicketStatus.Closed]: "已关闭",
+};
+
+const TICKET_STATUS_VARIANT: Record<string, "danger" | "warning" | "info" | "success" | "default"> = {
+  [TicketStatus.Open]: "danger",
+  [TicketStatus.InProgress]: "warning",
+  [TicketStatus.PendingReview]: "info",
+  [TicketStatus.Resolved]: "success",
+  [TicketStatus.Closed]: "default",
+};
+
+const PRIORITY_LABEL: Record<string, string> = {
+  [Priority.Critical]: "紧急",
+  [Priority.High]: "高",
+  [Priority.Medium]: "中",
+  [Priority.Low]: "低",
+};
+
+const PRIORITY_VARIANT: Record<string, "danger" | "warning" | "info" | "default"> = {
+  [Priority.Critical]: "danger",
+  [Priority.High]: "warning",
+  [Priority.Medium]: "info",
+  [Priority.Low]: "default",
+};
 
 const DONUT_COLORS = ["#00B4D8", "#F4A100", "#10B981", "#EF4444", "#8B5CF6"];
 
@@ -40,6 +82,7 @@ export default function Reports() {
   const [selectedSystem, setSelectedSystem] = useState<string>("");
   const [selectedRuleType, setSelectedRuleType] = useState<string>("");
   const [timeRange, setTimeRange] = useState<TimeRange>(30);
+  const [expandedTopicId, setExpandedTopicId] = useState<string | null>(null);
 
   const departments = useMemo(
     () => [...new Set(store.topics.map((t) => t.department))],
@@ -190,7 +233,7 @@ export default function Reports() {
   const issueResolutionRate = useMemo(() => {
     const total = fs.ticketStats.total;
     if (total === 0) return 0;
-    const resolved = fs.ticketStats.resolved + fs.ticketStats.closed;
+    const resolved = fs.ticketStats.closedOrResolved;
     return Math.round((resolved / total) * 100 * 10) / 10;
   }, [fs.ticketStats]);
 
@@ -308,8 +351,87 @@ export default function Reports() {
     donutData.forEach((d) => {
       rows.push([d.name, String(d.value)]);
     });
+    rows.push([""]);
 
-    const csvContent = "\uFEFF" + rows.map((r) => r.join(",")).join("\n");
+    rows.push(["规则明细", ""]);
+    rows.push(["规则名称", "类型", "所属主题", "状态", "目标阈值", "告警阈值"]);
+    if (filteredRules.length === 0) {
+      rows.push(["(无数据)"]);
+    } else {
+      filteredRules.forEach((r) => {
+        const topic = store.topics.find((t) => t.id === r.topicId);
+        const typeLabel = RULE_TYPE_OPTIONS.find((o) => o.value === r.type)?.label || r.type;
+        const statusLabel = RULE_STATUS_LABEL[r.status] || r.status;
+        rows.push([
+          r.name,
+          typeLabel,
+          topic?.name || "",
+          statusLabel,
+          r.threshold.target != null ? String(r.threshold.target) : "",
+          r.threshold.warning != null ? String(r.threshold.warning) : "",
+        ]);
+      });
+    }
+    rows.push([""]);
+
+    rows.push(["异常明细", ""]);
+    rows.push(["异常描述", "数据标识", "严重程度", "所属规则", "所属主题"]);
+    if (filteredAnomalies.length === 0) {
+      rows.push(["(无数据)"]);
+    } else {
+      filteredAnomalies.forEach((a) => {
+        const rule = store.rules.find((r) => r.id === a.ruleId);
+        const topic = store.topics.find((t) => t.id === a.topicId);
+        const severityLabel = PRIORITY_LABEL[a.severity] || a.severity;
+        rows.push([
+          a.description,
+          a.dataKey,
+          severityLabel,
+          rule?.name || "",
+          topic?.name || "",
+        ]);
+      });
+    }
+    rows.push([""]);
+
+    rows.push(["工单明细", ""]);
+    rows.push(["工单号", "标题", "状态", "优先级", "责任人", "所属主题"]);
+    if (filteredTickets.length === 0) {
+      rows.push(["(无数据)"]);
+    } else {
+      filteredTickets.forEach((t) => {
+        const topic = store.topics.find((tp) => tp.id === t.topicId);
+        const statusLabel = TICKET_STATUS_LABEL[t.status] || t.status;
+        const priorityLabel = PRIORITY_LABEL[t.priority] || t.priority;
+        const assignee = store.users?.find((u) => u.id === t.assigneeId);
+        rows.push([
+          t.id,
+          t.title,
+          statusLabel,
+          priorityLabel,
+          assignee?.name || t.assigneeId,
+          topic?.name || "",
+        ]);
+      });
+    }
+    rows.push([""]);
+
+    rows.push(["趋势数据", ""]);
+    rows.push(["日期", "质量分", "异常数", "已解决数"]);
+    if (fTrend.length === 0) {
+      rows.push(["(无数据)"]);
+    } else {
+      fTrend.forEach((p) => {
+        rows.push([
+          p.date,
+          String(p.score),
+          String(p.anomalyCount),
+          String(p.resolvedCount ?? ""),
+        ]);
+      });
+    }
+
+    const csvContent = "\uFEFF" + rows.map((r) => r.map(cell => `"${cell.replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -335,9 +457,9 @@ export default function Reports() {
     rows.push(["任务数", String(fs.taskCount)]);
     rows.push(["异常数", String(fs.anomalyCount)]);
     rows.push(["工单数", String(fs.ticketStats.total)]);
-    rows.push(["已解决工单", String(fs.ticketStats.resolved + fs.ticketStats.closed)]);
+    rows.push(["已解决工单", String(fs.ticketStats.closedOrResolved)]);
 
-    const csvContent = "\uFEFF" + rows.map((r) => r.join(",")).join("\n");
+    const csvContent = "\uFEFF" + rows.map((r) => r.map(cell => `"${cell.replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -444,6 +566,39 @@ export default function Reports() {
     timeRange,
     fs,
   ]);
+
+  const toggleTopic = (topicId: string) => {
+    setExpandedTopicId((prev) => (prev === topicId ? null : topicId));
+  };
+
+  const expandedTopicData = useMemo(() => {
+    if (!expandedTopicId) return null;
+    const topic = filteredTopics.find((t) => t.id === expandedTopicId);
+    if (!topic) return null;
+
+    const rules = filteredRules.filter((r) => r.topicId === expandedTopicId);
+    const ruleIds = rules.map((r) => r.id);
+    const anomalies = filteredAnomalies.filter((a) => ruleIds.includes(a.ruleId));
+    const tickets = filteredTickets.filter((t) => t.topicId === expandedTopicId);
+
+    const anomalyByType: { type: string; label: string; count: number; color: string }[] = [];
+    const typeCountMap: Record<string, number> = {};
+    for (const a of anomalies) {
+      const rule = rules.find((r) => r.id === a.ruleId);
+      if (rule) {
+        typeCountMap[rule.type] = (typeCountMap[rule.type] || 0) + 1;
+      }
+    }
+    for (const opt of RULE_TYPE_OPTIONS) {
+      const count = typeCountMap[opt.value] || 0;
+      if (count > 0) {
+        const idx = RULE_TYPE_OPTIONS.indexOf(opt);
+        anomalyByType.push({ type: opt.value, label: opt.label, count, color: DONUT_COLORS[idx] });
+      }
+    }
+
+    return { topic, rules, anomalies, tickets, anomalyByType };
+  }, [expandedTopicId, filteredTopics, filteredRules, filteredAnomalies, filteredTickets]);
 
   return (
     <div className="space-y-6 animate-fade-in-up">
@@ -711,6 +866,198 @@ export default function Reports() {
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-card border border-slate-100 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <Table2 className="w-4 h-4 text-slate-500" />
+            <div>
+              <h3 className="font-semibold text-slate-800">筛选明细</h3>
+              <p className="text-xs text-slate-500 mt-0.5">当前筛选范围内的主题、规则、异常和工单明细</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-5">
+          <div className="grid grid-cols-3 gap-4 mb-5">
+            <div className="bg-cyan-50/60 rounded-lg p-3 text-center border border-cyan-100">
+              <p className="text-2xl font-bold text-cyan-700 tabular-nums">{filteredTopics.length}</p>
+              <p className="text-xs text-cyan-600 mt-0.5">主题数</p>
+            </div>
+            <div className="bg-navy-50/60 rounded-lg p-3 text-center border border-navy-100">
+              <p className="text-2xl font-bold text-navy-700 tabular-nums">{filteredRules.length}</p>
+              <p className="text-xs text-navy-600 mt-0.5">规则数</p>
+            </div>
+            <div className="bg-gold-50/60 rounded-lg p-3 text-center border border-gold-100">
+              <p className="text-2xl font-bold text-gold-700 tabular-nums">{filteredAnomalies.length}</p>
+              <p className="text-xs text-gold-600 mt-0.5">异常数</p>
+            </div>
+          </div>
+
+          {filteredTopics.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-[1fr_100px_100px_80px_64px_64px_64px_40px] gap-2 px-4 py-2.5 bg-slate-50 text-xs font-medium text-slate-500 border-b border-slate-200">
+                <span>主题名称</span>
+                <span>系统</span>
+                <span>部门</span>
+                <span>质量分</span>
+                <span className="text-center">规则数</span>
+                <span className="text-center">异常数</span>
+                <span className="text-center">工单数</span>
+                <span></span>
+              </div>
+              {filteredTopics.map((topic) => {
+                const isExpanded = expandedTopicId === topic.id;
+                const topicRules = filteredRules.filter((r) => r.topicId === topic.id);
+                const topicRuleIds = topicRules.map((r) => r.id);
+                const topicAnomalyCount = filteredAnomalies.filter((a) =>
+                  topicRuleIds.includes(a.ruleId)
+                ).length;
+                const topicTicketCount = filteredTickets.filter(
+                  (t) => t.topicId === topic.id
+                ).length;
+
+                return (
+                  <div key={topic.id}>
+                    <button
+                      onClick={() => toggleTopic(topic.id)}
+                      className={cn(
+                        "w-full grid grid-cols-[1fr_100px_100px_80px_64px_64px_64px_40px] gap-2 px-4 py-3 text-sm text-left items-center transition-colors hover:bg-slate-50/80",
+                        isExpanded && "bg-cyan-50/30"
+                      )}
+                    >
+                      <span className="font-medium text-slate-800 truncate">{topic.name}</span>
+                      <span className="text-slate-600 truncate">{topic.system}</span>
+                      <span className="text-slate-600 truncate">{topic.department}</span>
+                      <span className="font-semibold text-slate-700 tabular-nums">{topic.score}</span>
+                      <span className="text-center text-slate-600 tabular-nums">{topicRules.length}</span>
+                      <span className="text-center text-slate-600 tabular-nums">{topicAnomalyCount}</span>
+                      <span className="text-center text-slate-600 tabular-nums">{topicTicketCount}</span>
+                      <span className="flex items-center justify-center">
+                        {isExpanded ? (
+                          <ChevronDown className="w-4 h-4 text-slate-400" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4 text-slate-400" />
+                        )}
+                      </span>
+                    </button>
+
+                    {isExpanded && expandedTopicData && expandedTopicData.topic.id === topic.id && (
+                      <div className="bg-slate-50/40 border-t border-slate-100 px-6 py-4 space-y-5">
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">关联规则</h4>
+                          {expandedTopicData.rules.length === 0 ? (
+                            <p className="text-xs text-slate-400 py-2">暂无关联规则</p>
+                          ) : (
+                            <div className="border border-slate-200 rounded-lg overflow-hidden">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-slate-100/80">
+                                    <th className="text-left px-3 py-2 font-medium text-slate-600">规则名称</th>
+                                    <th className="text-left px-3 py-2 font-medium text-slate-600">类型</th>
+                                    <th className="text-left px-3 py-2 font-medium text-slate-600">状态</th>
+                                    <th className="text-right px-3 py-2 font-medium text-slate-600">目标阈值</th>
+                                    <th className="text-right px-3 py-2 font-medium text-slate-600">告警阈值</th>
+                                    <th className="text-left px-3 py-2 font-medium text-slate-600">执行频率</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {expandedTopicData.rules.map((rule) => (
+                                    <tr key={rule.id} className="hover:bg-white/60">
+                                      <td className="px-3 py-2 text-slate-700 font-medium">{rule.name}</td>
+                                      <td className="px-3 py-2">
+                                        <Badge variant="info">
+                                          {RULE_TYPE_OPTIONS.find((o) => o.value === rule.type)?.label || rule.type}
+                                        </Badge>
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <Badge variant={RULE_STATUS_VARIANT[rule.status] || "default"}>
+                                          {RULE_STATUS_LABEL[rule.status] || rule.status}
+                                        </Badge>
+                                      </td>
+                                      <td className="px-3 py-2 text-right text-slate-600 tabular-nums">
+                                        {rule.threshold.target != null ? `${rule.threshold.target}%` : "-"}
+                                      </td>
+                                      <td className="px-3 py-2 text-right text-slate-600 tabular-nums">
+                                        {rule.threshold.warning != null ? `${rule.threshold.warning}%` : "-"}
+                                      </td>
+                                      <td className="px-3 py-2 text-slate-500">{rule.frequency}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">问题分布</h4>
+                          {expandedTopicData.anomalyByType.length === 0 ? (
+                            <p className="text-xs text-slate-400 py-2">暂无异常</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-3">
+                              {expandedTopicData.anomalyByType.map((item) => {
+                                const maxCount = Math.max(
+                                  ...expandedTopicData.anomalyByType.map((d) => d.count)
+                                );
+                                const widthPct = maxCount > 0 ? (item.count / maxCount) * 100 : 0;
+                                return (
+                                  <div key={item.type} className="flex items-center gap-2 min-w-[140px]">
+                                    <span className="text-xs text-slate-600 w-12 shrink-0">{item.label}</span>
+                                    <div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden">
+                                      <div
+                                        className="h-full rounded-full transition-all"
+                                        style={{
+                                          width: `${widthPct}%`,
+                                          backgroundColor: item.color,
+                                          minWidth: item.count > 0 ? "8px" : "0",
+                                        }}
+                                      />
+                                    </div>
+                                    <span className="text-xs font-semibold text-slate-700 tabular-nums w-6 text-right">
+                                      {item.count}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-600 mb-2 uppercase tracking-wide">关联工单</h4>
+                          {expandedTopicData.tickets.length === 0 ? (
+                            <p className="text-xs text-slate-400 py-2">暂无关联工单</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {expandedTopicData.tickets.map((ticket) => (
+                                <div
+                                  key={ticket.id}
+                                  className="flex items-center gap-3 px-3 py-2 bg-white rounded-lg border border-slate-100 text-xs"
+                                >
+                                  <span className="font-mono text-slate-500 shrink-0">{ticket.id}</span>
+                                  <span className="text-slate-700 font-medium truncate flex-1">{ticket.title}</span>
+                                  <Badge variant={TICKET_STATUS_VARIANT[ticket.status] || "default"}>
+                                    {TICKET_STATUS_LABEL[ticket.status] || ticket.status}
+                                  </Badge>
+                                  <Badge variant={PRIORITY_VARIANT[ticket.priority] || "default"}>
+                                    {PRIORITY_LABEL[ticket.priority] || ticket.priority}
+                                  </Badge>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

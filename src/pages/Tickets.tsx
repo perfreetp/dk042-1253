@@ -1,11 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   User as UserIcon,
   Clock,
   AlertTriangle,
   Search,
   ChevronRight,
-  FileText,
   Tag,
   Activity,
   ShieldCheck,
@@ -15,6 +14,9 @@ import {
   BarChart3,
   UserCheck,
   Info,
+  X,
+  UsersRound,
+  PlayCircle,
 } from 'lucide-react';
 import { useDQCStore } from '@/store/dqc';
 import { Drawer } from '@/components/ui/Drawer';
@@ -36,7 +38,7 @@ const STATUS_CONFIG: Record<TicketStatus, { label: string; variant: 'default' | 
   [TicketStatus.Open]: { label: '待处理', variant: 'default' },
   [TicketStatus.InProgress]: { label: '处理中', variant: 'info' },
   [TicketStatus.PendingReview]: { label: '待复检', variant: 'warning' },
-  [TicketStatus.Resolved]: { label: '已解决', variant: 'success' },
+  [TicketStatus.Resolved]: { label: '已解决(待确认)', variant: 'success' },
   [TicketStatus.Closed]: { label: '已关闭', variant: 'default' },
 };
 
@@ -53,6 +55,8 @@ const SEVERITY_CONFIG: Record<Priority, { label: string; class: string }> = {
   [Priority.Low]: { label: '低', class: 'text-slate-500' },
 };
 
+type StatusFilterKey = TicketStatus | 'all' | 'closedOrResolved';
+
 function computeSLA(slaDeadline: string): { text: string; urgent: boolean } {
   const diff = new Date(slaDeadline).getTime() - Date.now();
   if (diff <= 0) return { text: '已超期', urgent: true };
@@ -66,19 +70,40 @@ function computeSLA(slaDeadline: string): { text: string; urgent: boolean } {
   return { text: `${hours}小时${minutes}分钟`, urgent };
 }
 
+function getBadgeForStatus(status: TicketStatus): { label: string; variant: 'default' | 'success' | 'warning' | 'info' } {
+  if (status === TicketStatus.Resolved) return { label: '已解决(待确认)', variant: 'success' };
+  if (status === TicketStatus.Closed) return { label: '已关闭', variant: 'default' };
+  return STATUS_CONFIG[status];
+}
+
 export default function Tickets() {
   const store = useDQCStore();
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<TicketStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [assigneeId, setAssigneeId] = useState('');
   const [resolution, setResolution] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchAssigneeId, setBatchAssigneeId] = useState('');
+  const [showBatchAssign, setShowBatchAssign] = useState(false);
 
   const stats = store.ticketStats();
 
+  const statusFilters: { key: StatusFilterKey; label: string; count: number }[] = [
+    { key: 'all', label: '全部', count: stats.total },
+    { key: TicketStatus.Open, label: '待处理', count: stats.open },
+    { key: TicketStatus.InProgress, label: '处理中', count: stats.inProgress },
+    { key: TicketStatus.PendingReview, label: '待复检', count: stats.pendingReview },
+    { key: 'closedOrResolved', label: '已关闭', count: stats.closedOrResolved },
+  ];
+
   const filteredTickets = useMemo(() => {
     let list = store.tickets;
-    if (statusFilter !== 'all') list = list.filter((t) => t.status === statusFilter);
+    if (statusFilter === 'closedOrResolved') {
+      list = list.filter((t) => t.status === TicketStatus.Resolved || t.status === TicketStatus.Closed);
+    } else if (statusFilter !== 'all') {
+      list = list.filter((t) => t.status === statusFilter);
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter((t) => t.id.toLowerCase().includes(q) || t.title.toLowerCase().includes(q));
@@ -96,6 +121,45 @@ export default function Tickets() {
   const sortedActivities = useMemo(() => {
     return [...ticketActivities].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [ticketActivities]);
+
+  const filteredTicketIds = useMemo(() => new Set(filteredTickets.map((t) => t.id)), [filteredTickets]);
+
+  const isAllSelected = filteredTickets.length > 0 && filteredTickets.every((t) => selectedIds.has(t.id));
+  const isPartialSelected = !isAllSelected && filteredTickets.some((t) => selectedIds.has(t.id));
+
+  const selectedStatuses = useMemo(() => {
+    const statuses = new Set<TicketStatus>();
+    selectedIds.forEach((id) => {
+      const ticket = store.tickets.find((t) => t.id === id);
+      if (ticket) statuses.add(ticket.status);
+    });
+    return statuses;
+  }, [selectedIds, store.tickets]);
+
+  const batchMode = selectedIds.size > 0;
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    setShowBatchAssign(false);
+    setBatchAssigneeId('');
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAll = useCallback(() => {
+    if (isAllSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredTicketIds));
+    }
+  }, [isAllSelected, filteredTicketIds]);
 
   const handleAssign = () => {
     if (!selectedTicketId || !assigneeId) return;
@@ -129,20 +193,27 @@ export default function Tickets() {
     store.resolveToClosed(selectedTicketId);
   };
 
+  const handleBatchAssign = () => {
+    if (!batchAssigneeId) return;
+    store.batchAssignTickets(Array.from(selectedIds), batchAssigneeId);
+    clearSelection();
+  };
+
+  const handleBatchStartProcessing = () => {
+    store.batchStartProcessing(Array.from(selectedIds));
+    clearSelection();
+  };
+
+  const handleBatchResolveToClosed = () => {
+    store.batchResolveToClosed(Array.from(selectedIds));
+    clearSelection();
+  };
+
   const closeDrawer = () => {
     setSelectedTicketId(null);
     setAssigneeId('');
     setResolution('');
   };
-
-  const statusFilters: { key: TicketStatus | 'all'; label: string; count: number }[] = [
-    { key: 'all', label: '全部', count: stats.total },
-    { key: TicketStatus.Open, label: '待处理', count: stats.open },
-    { key: TicketStatus.InProgress, label: '处理中', count: stats.inProgress },
-    { key: TicketStatus.PendingReview, label: '待复检', count: stats.pendingReview },
-    { key: TicketStatus.Resolved, label: '已解决', count: stats.resolved },
-    { key: TicketStatus.Closed, label: '已关闭', count: stats.closed },
-  ];
 
   const renderFooter = () => {
     if (!selectedTicket) return null;
@@ -238,6 +309,102 @@ export default function Tickets() {
 
   const footerContent = renderFooter();
 
+  const renderBatchActions = () => {
+    if (!batchMode) return null;
+
+    const statusArr = Array.from(selectedStatuses);
+
+    let actions: React.ReactNode = null;
+
+    if (statusArr.length === 1 && statusArr[0] === TicketStatus.Open) {
+      actions = (
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBatchAssign(!showBatchAssign)}
+              leftIcon={<UsersRound className="w-4 h-4" />}
+            >
+              批量分派
+            </Button>
+            {showBatchAssign && (
+              <div className="absolute top-full left-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-20 animate-fade-in">
+                <select
+                  value={batchAssigneeId}
+                  onChange={(e) => setBatchAssigneeId(e.target.value)}
+                  className="w-full h-9 px-3 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-400 bg-white mb-2"
+                >
+                  <option value="">选择责任人...</option>
+                  {store.users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name} - {u.department}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  disabled={!batchAssigneeId}
+                  onClick={handleBatchAssign}
+                  className="w-full"
+                >
+                  确认分派
+                </Button>
+              </div>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleBatchStartProcessing}
+            leftIcon={<PlayCircle className="w-4 h-4" />}
+          >
+            批量开始处理
+          </Button>
+        </div>
+      );
+    } else if (statusArr.length === 1 && statusArr[0] === TicketStatus.Resolved) {
+      actions = (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleBatchResolveToClosed}
+          leftIcon={<CheckCircle2 className="w-4 h-4" />}
+        >
+          批量确认关闭
+        </Button>
+      );
+    } else if (statusArr.length === 1 && (statusArr[0] === TicketStatus.InProgress || statusArr[0] === TicketStatus.PendingReview)) {
+      const label = statusArr[0] === TicketStatus.InProgress ? '处理中' : '待复检';
+      actions = (
+        <span className="text-xs text-slate-500">
+          {label}工单需逐条操作，暂不支持批量处理
+        </span>
+      );
+    } else if (statusArr.length > 1) {
+      actions = (
+        <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg">
+          请选择相同状态的工单进行批量操作
+        </span>
+      );
+    }
+
+    return (
+      <div className="flex items-center justify-between bg-navy-50 border border-navy-100 rounded-xl px-4 py-3">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-navy-700">已选 {selectedIds.size} 项</span>
+          <button
+            onClick={clearSelection}
+            className="text-xs text-slate-500 hover:text-slate-700 underline underline-offset-2"
+          >
+            取消选择
+          </button>
+        </div>
+        <div className="flex items-center gap-2">{actions}</div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 animate-fade-in-up">
       <div className="flex items-center justify-between">
@@ -274,7 +441,7 @@ export default function Tickets() {
         />
         <StatCard
           title="已关闭"
-          value={stats.closed + stats.resolved}
+          value={stats.closedOrResolved}
           icon={<CheckCircle2 className="w-5 h-5" />}
           accentColor="success"
         />
@@ -298,7 +465,7 @@ export default function Tickets() {
             {statusFilters.map((f) => (
               <button
                 key={f.key}
-                onClick={() => setStatusFilter(f.key)}
+                onClick={() => { setStatusFilter(f.key); clearSelection(); }}
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
                   statusFilter === f.key
@@ -313,61 +480,95 @@ export default function Tickets() {
           </div>
         </div>
 
+        {renderBatchActions()}
+
         <div className="divide-y divide-slate-50">
           {filteredTickets.length === 0 ? (
             <div className="p-12 text-center text-sm text-slate-400">暂无匹配的工单</div>
           ) : (
-            filteredTickets.map((ticket) => {
-              const prio = PRIORITY_CONFIG[ticket.priority];
-              const stat = STATUS_CONFIG[ticket.status];
-              const sla = computeSLA(ticket.slaDeadline);
-              const assignee = store.getUserById(ticket.assigneeId);
-              const statusBadgeVariant = ticket.status === TicketStatus.Resolved
-                ? 'success'
-                : ticket.status === TicketStatus.Closed
-                  ? 'default'
-                  : stat.variant;
-              return (
-                <div
-                  key={ticket.id}
-                  onClick={() => setSelectedTicketId(ticket.id)}
-                  className={cn(
-                    'flex items-stretch cursor-pointer hover:bg-slate-50/50 transition-colors border-l-4',
-                    prio.borderClass
-                  )}
-                >
-                  <div className="flex-1 p-5 min-w-0">
-                    <div className="flex items-center gap-3 mb-2 flex-wrap">
-                      <span className="font-mono text-xs text-navy-600 font-medium">
-                        {ticket.id}
-                      </span>
-                      <Badge variant={prio.variant}>{prio.label}</Badge>
-                      <Badge variant={statusBadgeVariant}>{stat.label}</Badge>
-                    </div>
-                    <h4 className="font-medium text-slate-800 mb-3">{ticket.title}</h4>
-                    <div className="flex items-center gap-5 text-xs text-slate-500 flex-wrap">
-                      <div className="flex items-center gap-1.5">
-                        <UserIcon className="w-3.5 h-3.5" />
-                        <span>{assignee?.name || '未分派'}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span className={cn(sla.urgent && 'text-danger-600 font-medium')}>
-                          SLA: {sla.text}
+            <>
+              <div className="flex items-center px-5 py-2.5 bg-slate-50/60 border-b border-slate-100">
+                <label className="flex items-center mr-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = isPartialSelected;
+                    }}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded border-slate-300 text-navy-600 focus:ring-navy-500/30"
+                  />
+                </label>
+                <span className="text-xs text-slate-400 font-medium flex-1">
+                  {statusFilter === 'all' ? '全部工单' : statusFilters.find((f) => f.key === statusFilter)?.label}
+                  {' '}({filteredTickets.length})
+                </span>
+              </div>
+              {filteredTickets.map((ticket) => {
+                const prio = PRIORITY_CONFIG[ticket.priority];
+                const badgeInfo = getBadgeForStatus(ticket.status);
+                const sla = computeSLA(ticket.slaDeadline);
+                const assignee = store.getUserById(ticket.assigneeId);
+                const isSelected = selectedIds.has(ticket.id);
+                return (
+                  <div
+                    key={ticket.id}
+                    className={cn(
+                      'flex items-stretch transition-colors border-l-4',
+                      prio.borderClass,
+                      isSelected ? 'bg-navy-50/40' : 'hover:bg-slate-50/50'
+                    )}
+                  >
+                    <label
+                      className="flex items-center pl-5 cursor-pointer"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(ticket.id)}
+                        className="w-4 h-4 rounded border-slate-300 text-navy-600 focus:ring-navy-500/30"
+                      />
+                    </label>
+                    <div
+                      className="flex-1 p-5 min-w-0 cursor-pointer"
+                      onClick={() => setSelectedTicketId(ticket.id)}
+                    >
+                      <div className="flex items-center gap-3 mb-2 flex-wrap">
+                        <span className="font-mono text-xs text-navy-600 font-medium">
+                          {ticket.id}
                         </span>
+                        <Badge variant={prio.variant}>{prio.label}</Badge>
+                        <Badge variant={badgeInfo.variant}>{badgeInfo.label}</Badge>
                       </div>
-                      <div className="flex items-center gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                        <span>影响数据: {ticket.anomalyIds.length} 条</span>
+                      <h4 className="font-medium text-slate-800 mb-3">{ticket.title}</h4>
+                      <div className="flex items-center gap-5 text-xs text-slate-500 flex-wrap">
+                        <div className="flex items-center gap-1.5">
+                          <UserIcon className="w-3.5 h-3.5" />
+                          <span>{assignee?.name || '未分派'}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span className={cn(sla.urgent && 'text-danger-600 font-medium')}>
+                            SLA: {sla.text}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>影响数据: {ticket.anomalyIds.length} 条</span>
+                        </div>
                       </div>
                     </div>
+                    <div
+                      className="flex items-center pr-4 cursor-pointer"
+                      onClick={() => setSelectedTicketId(ticket.id)}
+                    >
+                      <ChevronRight className="w-4 h-4 text-slate-300" />
+                    </div>
                   </div>
-                  <div className="flex items-center pr-4">
-                    <ChevronRight className="w-4 h-4 text-slate-300" />
-                  </div>
-                </div>
-              );
-            })
+                );
+              })}
+            </>
           )}
         </div>
       </div>
@@ -395,16 +596,10 @@ export default function Tickets() {
                     {PRIORITY_CONFIG[selectedTicket.priority].label}优先级
                   </Badge>
                   <Badge
-                    variant={
-                      selectedTicket.status === TicketStatus.Resolved
-                        ? 'success'
-                        : selectedTicket.status === TicketStatus.Closed
-                          ? 'default'
-                          : STATUS_CONFIG[selectedTicket.status].variant
-                    }
+                    variant={getBadgeForStatus(selectedTicket.status).variant}
                     withDot
                   >
-                    {STATUS_CONFIG[selectedTicket.status].label}
+                    {getBadgeForStatus(selectedTicket.status).label}
                   </Badge>
                   <span className="text-xs text-slate-400 font-mono">{selectedTicket.id}</span>
                 </div>

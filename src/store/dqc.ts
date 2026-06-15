@@ -57,6 +57,7 @@ interface FilteredStats {
     pendingReview: number;
     resolved: number;
     closed: number;
+    closedOrResolved: number;
   };
   topicScores: {
     topicId: string;
@@ -106,10 +107,13 @@ interface DQCStore {
   approveReview: (ticketId: string) => void;
   rejectReview: (ticketId: string) => void;
   resolveToClosed: (ticketId: string) => void;
+  batchAssignTickets: (ticketIds: string[], assigneeId: string) => void;
+  batchStartProcessing: (ticketIds: string[]) => void;
+  batchResolveToClosed: (ticketIds: string[]) => void;
 
   ruleStats: () => { total: number; enabled: number; disabled: number; pending: number };
   taskStats: () => { total: number; running: number; success: number; failed: number; pending: number };
-  ticketStats: () => { total: number; open: number; inProgress: number; pendingReview: number; resolved: number; closed: number };
+  ticketStats: () => { total: number; open: number; inProgress: number; pendingReview: number; resolved: number; closed: number; closedOrResolved: number };
   overallQualityScore: () => number;
 
   getFilteredStats: (filters: { department?: string; system?: string; ruleType?: RuleType }) => FilteredStats;
@@ -386,6 +390,67 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
       ],
     })),
 
+  batchAssignTickets: (ticketIds, assigneeId) =>
+    set((state) => {
+      const assigneeName = state.users.find((u) => u.id === assigneeId)?.name || assigneeId;
+      const newActivities = ticketIds.map((tid, i) => ({
+        id: `act_${Date.now()}_batch_${i}`,
+        ticketId: tid,
+        type: 'assignment' as const,
+        content: `工单已批量分派给 ${assigneeName}`,
+        operatorId: 'u001',
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        tickets: state.tickets.map((t) =>
+          ticketIds.includes(t.id)
+            ? { ...t, assigneeId, updatedAt: new Date().toISOString() }
+            : t
+        ),
+        ticketActivities: [...state.ticketActivities, ...newActivities],
+      };
+    }),
+
+  batchStartProcessing: (ticketIds) =>
+    set((state) => {
+      const newActivities = ticketIds.map((tid, i) => ({
+        id: `act_${Date.now()}_batch_${i}`,
+        ticketId: tid,
+        type: 'status_change' as const,
+        content: '批量开始处理工单',
+        operatorId: state.tickets.find((t) => t.id === tid)?.assigneeId || 'u001',
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        tickets: state.tickets.map((t) =>
+          ticketIds.includes(t.id)
+            ? { ...t, status: TicketStatus.InProgress, updatedAt: new Date().toISOString() }
+            : t
+        ),
+        ticketActivities: [...state.ticketActivities, ...newActivities],
+      };
+    }),
+
+  batchResolveToClosed: (ticketIds) =>
+    set((state) => {
+      const newActivities = ticketIds.map((tid, i) => ({
+        id: `act_${Date.now()}_batch_${i}`,
+        ticketId: tid,
+        type: 'status_change' as const,
+        content: '批量确认关闭工单',
+        operatorId: 'u001',
+        createdAt: new Date().toISOString(),
+      }));
+      return {
+        tickets: state.tickets.map((t) =>
+          ticketIds.includes(t.id)
+            ? { ...t, status: TicketStatus.Closed, updatedAt: new Date().toISOString() }
+            : t
+        ),
+        ticketActivities: [...state.ticketActivities, ...newActivities],
+      };
+    }),
+
   ruleStats: () => {
     const { rules } = get();
     return {
@@ -409,13 +474,16 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
 
   ticketStats: () => {
     const { tickets } = get();
+    const resolved = tickets.filter((t) => t.status === TicketStatus.Resolved).length;
+    const closed = tickets.filter((t) => t.status === TicketStatus.Closed).length;
     return {
       total: tickets.length,
       open: tickets.filter((t) => t.status === TicketStatus.Open).length,
       inProgress: tickets.filter((t) => t.status === TicketStatus.InProgress).length,
       pendingReview: tickets.filter((t) => t.status === TicketStatus.PendingReview).length,
-      resolved: tickets.filter((t) => t.status === TicketStatus.Resolved).length,
-      closed: tickets.filter((t) => t.status === TicketStatus.Closed).length,
+      resolved,
+      closed,
+      closedOrResolved: resolved + closed,
     };
   },
 
@@ -467,6 +535,7 @@ export const useDQCStore = create<DQCStore>((set, get) => ({
       pendingReview: filteredTickets.filter((t) => t.status === TicketStatus.PendingReview).length,
       resolved: filteredTickets.filter((t) => t.status === TicketStatus.Resolved).length,
       closed: filteredTickets.filter((t) => t.status === TicketStatus.Closed).length,
+      closedOrResolved: filteredTickets.filter((t) => t.status === TicketStatus.Resolved || t.status === TicketStatus.Closed).length,
     };
 
     const topicScores = filteredTopics.map((t) => ({
